@@ -19,7 +19,60 @@ import (
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"gopkg.in/yaml.v3"
 )
+
+type Config struct {
+	Theme ThemeType `yaml:"theme"`
+}
+
+func getConfigPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	configDir := filepath.Join(home, ".config", "lumina")
+	_ = os.MkdirAll(configDir, 0755)
+	return filepath.Join(configDir, "config.yaml")
+}
+
+func loadConfig() Config {
+	path := getConfigPath()
+	if path == "" {
+		return Config{Theme: ThemeOcean}
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return Config{Theme: ThemeOcean}
+	}
+
+	var cfg Config
+	if err := yaml.Unmarshal(data, &cfg); err != nil {
+		return Config{Theme: ThemeOcean}
+	}
+
+	if _, ok := themes[cfg.Theme]; !ok {
+		return Config{Theme: ThemeOcean}
+	}
+
+	return cfg
+}
+
+func saveConfig(theme ThemeType) {
+	path := getConfigPath()
+	if path == "" {
+		return
+	}
+
+	cfg := Config{Theme: theme}
+	data, err := yaml.Marshal(&cfg)
+	if err != nil {
+		return
+	}
+
+	_ = os.WriteFile(path, data, 0644)
+}
 
 type ThemeType string
 
@@ -49,7 +102,7 @@ type Theme struct {
 	success    lipgloss.Color
 	warning    lipgloss.Color
 	error      lipgloss.Color
-	highlight lipgloss.Color
+	highlight  lipgloss.Color
 	dimText    lipgloss.Color
 	brightText lipgloss.Color
 }
@@ -262,10 +315,10 @@ type procInfo struct {
 }
 
 type gpuInfo struct {
-	name      string
-	vendor    string
-	driver    string
-	vramMB    uint64
+	name       string
+	vendor     string
+	driver     string
+	vramMB     uint64
 	curFreqMHz uint64
 	maxFreqMHz uint64
 }
@@ -1145,6 +1198,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.themeIndex > 0 {
 					m.themeIndex--
 					m.theme = themeList[m.themeIndex]
+					saveConfig(m.theme)
+					t := themes[m.theme]
+					m.spinner.Style = lipgloss.NewStyle().Foreground(t.primary)
+					m.progress = progress.New(progress.WithGradient(string(t.primary), string(t.secondary)))
 				}
 			}
 			return m, nil
@@ -1161,6 +1218,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if m.themeIndex < len(themeList)-1 {
 					m.themeIndex++
 					m.theme = themeList[m.themeIndex]
+					saveConfig(m.theme)
+					t := themes[m.theme]
+					m.spinner.Style = lipgloss.NewStyle().Foreground(t.primary)
+					m.progress = progress.New(progress.WithGradient(string(t.primary), string(t.secondary)))
 				}
 			}
 			return m, nil
@@ -1356,7 +1417,7 @@ func (m *model) renderRight(t Theme) string {
 	if m.scanPending {
 		return lipgloss.NewStyle().Width(w).Height(16).Padding(0, 0, 0, 1).
 			Border(lipgloss.ThickBorder()).BorderForeground(themeTitle(t).GetForeground()).
-			Render("\n\n  "+m.spinner.View()+" scanning files...")
+			Render("\n\n  " + m.spinner.View() + " scanning files...")
 	}
 
 	if len(m.fileEntries) == 0 {
@@ -1797,9 +1858,18 @@ func main() {
 
 	t, i, nCPUs := getCPUUsage()
 
+	cfg := loadConfig()
+	themeIdx := 0
+	for i, thm := range themeList {
+		if thm == cfg.Theme {
+			themeIdx = i
+			break
+		}
+	}
+
 	m := &model{
-		spinner:      spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(themes[ThemeOcean].primary))),
-		progress:     progress.New(progress.WithGradient("#0891b2", "#38bdf8")),
+		spinner:      spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(themes[cfg.Theme].primary))),
+		progress:     progress.New(progress.WithGradient(string(themes[cfg.Theme].primary), string(themes[cfg.Theme].secondary))),
 		targets:      targets,
 		state:        "ready",
 		osInfo:       osName,
@@ -1809,8 +1879,8 @@ func main() {
 		prevCPUIdle:  i,
 		numCPUs:      nCPUs,
 		loadAvg:      []float64{0, 0, 0},
-		theme:        ThemeOcean,
-		themeIndex:   0,
+		theme:        cfg.Theme,
+		themeIndex:   themeIdx,
 	}
 
 	getSysInfo(m)
