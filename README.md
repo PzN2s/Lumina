@@ -8,6 +8,10 @@
 <p align="center"><b>A TUI system cleaner &amp; monitor for Linux 🐧</b></p>
 
 <p align="center">
+  <img src="lumina.png" alt="Lumina screenshot" width="750">
+</p>
+
+<p align="center">
   <i>Because clicking through settings panels is for peasants.</i>
 </p>
 
@@ -24,7 +28,27 @@ go build -o lumina .
 sudo ./lumina
 ```
 
+To run it from anywhere:
+
+```bash
+sudo cp lumina /usr/local/bin/
+lumina
+```
+
 > Requires **Go 1.26+** and **root privileges** (sudo / pkexec).
+
+### Installing Go per distro
+
+| Distro | Command |
+|:---|:---|
+| Ubuntu / Debian / Mint / Pop / Zorin / Elementary / Deepin / Raspbian | `sudo apt install golang-go` |
+| Fedora / CentOS / Rocky / AlmaLinux | `sudo dnf install golang` |
+| Arch / ArchARM / Manjaro / EndeavourOS / CachyOS | `sudo pacman -S go` |
+| openSUSE Leap / Tumbleweed | `sudo zypper install go` |
+| Void Linux | `sudo xbps-install go` |
+| Alpine Linux | `sudo apk add go` |
+| Gentoo | `sudo emerge dev-lang/go` |
+| NixOS | `nix-shell -p go -p gcc`
 
 ---
 
