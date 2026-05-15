@@ -105,4 +105,4 @@ Built on [`bubbletea`](https://github.com/charmbracelet/bubbletea) and [`lipglos
 
 ## License
 
-MIT — do whatever the hell you want with it.
+MIT — do whatever the hell you want with it, but if you modify or redistribute it, you **must keep the original copyright notice** and credit **PzN2s**. Don't be that person who steals code and pretends they wrote it.
