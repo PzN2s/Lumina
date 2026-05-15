@@ -14,6 +14,9 @@
 <p align="center">
   <i>Because clicking through settings panels is for peasants.</i>
 </p>
+<p align="center">
+  <b>Written entirely by hand — zero AI-generated code.</b>
+</p>
 
 <br>
 
