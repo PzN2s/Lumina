@@ -18,7 +18,7 @@
 ## Install
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/Lumina
+git clone https://github.com/PzN2s/Lumina
 cd Lumina
 go build -o lumina .
 sudo ./lumina
