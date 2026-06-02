@@ -367,6 +367,8 @@ type model struct {
 	themeIndex   int
 	themeTab     int
 	cleanErrors  []string
+	updateStatus string
+	updateOutput string
 }
 
 func detectOS() (name, icon string) {
@@ -1075,6 +1077,11 @@ type cleanDoneMsg struct {
 	errors []string
 }
 
+type updateMsg struct {
+	success bool
+	output  string
+}
+
 type sizeMsg struct {
 	index int
 	size  int64
@@ -1180,6 +1187,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mu.Unlock()
 		return m, nil
 	case tea.KeyMsg:
+		if m.updateStatus == "done" || m.updateStatus == "error" {
+			m.updateStatus = ""
+			m.updateOutput = ""
+		}
 		if m.confirming {
 			switch msg.String() {
 			case "y", "Y":
@@ -1247,7 +1258,21 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.confirming = true
 				return m, nil
 			}
+		case "u":
+			if m.state != "running" && m.state != "cleaning" && m.state != "updating" {
+				m.updateStatus = "updating"
+				m.state = "updating"
+				return m, m.update()
+			}
 		}
+	case updateMsg:
+		m.updateStatus = "done"
+		m.updateOutput = msg.output
+		if !msg.success {
+			m.updateStatus = "error"
+		}
+		m.state = "ready"
+		return m, nil
 	case tickMsg:
 		if m.state == "running" {
 			m.progressPct += 0.05
@@ -1332,7 +1357,38 @@ func (m *model) View() string {
 		tabStyle(m.tab == 2, t).Render(" Theme "))
 
 	var content string
-	if m.tab == 0 {
+	if m.updateStatus == "updating" {
+		dialogContent := fmt.Sprintf(
+			"%s\n\n%s\n\nUpdating Lumina...\nPlease wait.",
+			themeTitle(t).Render("⚠ Updating"),
+			m.spinner.View(),
+		)
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(t.primary).
+			Padding(2, 4).
+			Render(dialogContent)
+		content = dialog
+	} else if m.updateStatus == "done" || m.updateStatus == "error" {
+		title := "✔ Update Complete"
+		col := t.success
+		if m.updateStatus == "error" {
+			title = "✘ Update Failed"
+			col = t.error
+		}
+		dialogContent := fmt.Sprintf(
+			"%s\n\n%s\n\n%s",
+			lipgloss.NewStyle().Foreground(col).Bold(true).Render(title),
+			m.updateOutput,
+			lipgloss.NewStyle().Foreground(t.muted).Render("Press any key to continue"),
+		)
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(col).
+			Padding(1, 2).
+			Render(dialogContent)
+		content = dialog
+	} else if m.tab == 0 {
 		if m.confirming {
 			dialogContent := fmt.Sprintf(
 				"%s\n\nAre you sure you want to clean\nthe selected targets?\nThis action cannot be undone.\n\n%s  %s",
@@ -1801,6 +1857,36 @@ func commandExists(cmd string) bool {
 	return err == nil
 }
 
+func getLuminaDir() string {
+	exe, err := os.Executable()
+	if err != nil {
+		return "."
+	}
+	return filepath.Dir(exe)
+}
+
+func (m *model) update() tea.Cmd {
+	return func() tea.Msg {
+		dir := getLuminaDir()
+
+		pullCmd := exec.Command("git", "pull")
+		pullCmd.Dir = dir
+		pullOut, err := pullCmd.CombinedOutput()
+		if err != nil {
+			return updateMsg{success: false, output: fmt.Sprintf("git pull failed:\n%s", string(pullOut))}
+		}
+
+		buildCmd := exec.Command("go", "build", "-o", "lumina", ".")
+		buildCmd.Dir = dir
+		buildOut, err := buildCmd.CombinedOutput()
+		if err != nil {
+			return updateMsg{success: false, output: fmt.Sprintf("build failed:\n%s", string(buildOut))}
+		}
+
+		return updateMsg{success: true, output: fmt.Sprintf("git pull:\n%s\nbuild: success", string(pullOut))}
+	}
+}
+
 func (m *model) clean() tea.Cmd {
 	return func() tea.Msg {
 		var errs []string
@@ -1884,6 +1970,32 @@ func animTick() tea.Cmd {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--update" {
+		dir := getLuminaDir()
+		fmt.Println("Updating Lumina...")
+
+		pullCmd := exec.Command("git", "pull")
+		pullCmd.Dir = dir
+		pullOut, err := pullCmd.CombinedOutput()
+		fmt.Print(string(pullOut))
+		if err != nil {
+			fmt.Printf("git pull failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		buildCmd := exec.Command("go", "build", "-o", "lumina", ".")
+		buildCmd.Dir = dir
+		buildOut, err := buildCmd.CombinedOutput()
+		fmt.Print(string(buildOut))
+		if err != nil {
+			fmt.Printf("build failed: %v\n", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Lumina updated successfully!")
+		return
+	}
+
 	if !hasRootPrivileges() {
 		fmt.Println("This program requires root privileges. Please run with sudo or pkexec.")
 		os.Exit(1)
