@@ -329,6 +329,7 @@ type model struct {
 	targets      []*target
 	index        int
 	state        string
+	confirming   bool
 	osInfo       string
 	osIcon       string
 	progressPct  float64
@@ -1179,6 +1180,18 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.mu.Unlock()
 		return m, nil
 	case tea.KeyMsg:
+		if m.confirming {
+			switch msg.String() {
+			case "y", "Y":
+				m.confirming = false
+				m.state = "running"
+				return m, tick()
+			case "n", "N", "esc":
+				m.confirming = false
+				return m, nil
+			}
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -1231,8 +1244,8 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if m.tab == 0 && m.state == "ready" {
-				m.state = "running"
-				return m, tick()
+				m.confirming = true
+				return m, nil
 			}
 		}
 	case tickMsg:
@@ -1320,10 +1333,25 @@ func (m *model) View() string {
 
 	var content string
 	if m.tab == 0 {
-		left := m.renderLeft(t)
-		right := m.renderRight(t)
-		split := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-		content = header + "\n" + split
+		if m.confirming {
+			dialogContent := fmt.Sprintf(
+				"%s\n\nAre you sure you want to clean\nthe selected targets?\nThis action cannot be undone.\n\n%s  %s",
+				themeTitle(t).Render("⚠ Confirm Clean"),
+				lipgloss.NewStyle().Foreground(t.success).Render("[Y] Yes"),
+				lipgloss.NewStyle().Foreground(t.error).Render("[N] No"),
+			)
+			dialog := lipgloss.NewStyle().
+				Border(lipgloss.DoubleBorder()).
+				BorderForeground(t.warning).
+				Padding(1, 3).
+				Render(dialogContent)
+			content = dialog
+		} else {
+			left := m.renderLeft(t)
+			right := m.renderRight(t)
+			split := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
+			content = header + "\n" + split
+		}
 	} else if m.tab == 1 {
 		content = header + "\n" + m.renderMonitor(t)
 	} else {
@@ -1346,14 +1374,23 @@ func (m *model) View() string {
 	}
 
 	var b strings.Builder
-	for i := 0; i < vPad; i++ {
-		b.WriteByte('\n')
+	for row := 0; row < m.height; row++ {
+		if row >= vPad && row < vPad+len(lines) {
+			line := lines[row-vPad]
+			b.WriteString(strings.Repeat(" ", hPad))
+			b.WriteString(line)
+			lw := hPad + lipgloss.Width(line)
+			if m.width > lw {
+				b.WriteString(strings.Repeat(" ", m.width-lw))
+			}
+		} else {
+			b.WriteString(strings.Repeat(" ", m.width))
+		}
+		if row < m.height-1 {
+			b.WriteByte('\n')
+		}
 	}
-	for _, line := range lines {
-		b.WriteString(strings.Repeat(" ", hPad))
-		b.WriteString(line)
-		b.WriteByte('\n')
-	}
+
 	return b.String()
 }
 
