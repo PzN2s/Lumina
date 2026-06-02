@@ -31,10 +31,10 @@ go build -o lumina .
 sudo ./lumina
 ```
 
-To run it from anywhere:
+To run it from anywhere (add to your PATH):
 
 ```bash
-sudo cp lumina /usr/local/bin/
+cp lumina ~/.local/bin/
 lumina
 ```
 
@@ -42,8 +42,12 @@ lumina
 
 ### Updating
 
+> **Important:** The update command must be run from the Lumina source folder (where you cloned the repo).
+
+From the source folder:
+
 ```bash
-sudo lumina --update
+sudo ./lumina --update
 ```
 
 Or press `u` inside the TUI. This runs `git pull` + `go build` to update to the latest version.
