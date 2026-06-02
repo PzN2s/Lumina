@@ -1351,7 +1351,7 @@ func (m *model) View() string {
 	header := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s\n",
 		themeHeader(t).Render(" LUMINA INSPECTOR "),
 		m.osIcon, m.osInfo,
-		lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Bold(true).Render("Reham"),
+		lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Bold(true).Render("DEV : Reham"),
 		tabStyle(m.tab == 0, t).Render(" Cleaner "),
 		tabStyle(m.tab == 1, t).Render(" Monitor "),
 		tabStyle(m.tab == 2, t).Render(" Theme "))
