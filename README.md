@@ -15,7 +15,7 @@
   <i>Because clicking through settings panels is for peasants.</i>
 </p>
 <p align="center">
-  <b>Built by DEV : Reham &amp; PzN2s</b>
+  <b>Built by DEV : Reham</b>
 </p>
 
 <br>
