@@ -92,6 +92,16 @@ const (
 	ThemeCherry   ThemeType = "cherry"
 	ThemeSage     ThemeType = "sage"
 	ThemeMidnight ThemeType = "midnight"
+	ThemeWarm     ThemeType = "warm"
+	ThemeMellow   ThemeType = "mellow"
+	ThemeTwilight ThemeType = "twilight"
+	ThemeSand     ThemeType = "sand"
+	ThemeMint     ThemeType = "mint"
+	ThemePeach    ThemeType = "peach"
+	ThemeHaze     ThemeType = "haze"
+	ThemePebble   ThemeType = "pebble"
+	ThemeHoney    ThemeType = "honey"
+	ThemeMoonlight ThemeType = "moonlight"
 )
 
 type Theme struct {
@@ -213,12 +223,84 @@ var themes = map[ThemeType]Theme{
 		highlight: lipgloss.Color("#6366f1"), dimText: lipgloss.Color("#818cf8"),
 		brightText: lipgloss.Color("#e0e7ff"),
 	},
+	ThemeWarm: {
+		name: "Warm", primary: lipgloss.Color("#c28b3e"), secondary: lipgloss.Color("#e8b76c"),
+		muted: lipgloss.Color("#7a5520"), success: lipgloss.Color("#7ab648"),
+		warning: lipgloss.Color("#dba85e"), error: lipgloss.Color("#d4726a"),
+		highlight: lipgloss.Color("#f0d8a8"), dimText: lipgloss.Color("#e8d5b0"),
+		brightText: lipgloss.Color("#faf0e0"),
+	},
+	ThemeMellow: {
+		name: "Mellow", primary: lipgloss.Color("#3d7a5a"), secondary: lipgloss.Color("#5a9e7a"),
+		muted: lipgloss.Color("#2a533a"), success: lipgloss.Color("#6abf8e"),
+		warning: lipgloss.Color("#a8d8b8"), error: lipgloss.Color("#c97a6a"),
+		highlight: lipgloss.Color("#a8d8b8"), dimText: lipgloss.Color("#d0e8d8"),
+		brightText: lipgloss.Color("#eef8f0"),
+	},
+	ThemeTwilight: {
+		name: "Twilight", primary: lipgloss.Color("#6a5a8e"), secondary: lipgloss.Color("#8a7aaa"),
+		muted: lipgloss.Color("#4a3a6a"), success: lipgloss.Color("#7ac8a8"),
+		warning: lipgloss.Color("#b8a8d8"), error: lipgloss.Color("#c87a7a"),
+		highlight: lipgloss.Color("#d0c0e8"), dimText: lipgloss.Color("#ddd8ee"),
+		brightText: lipgloss.Color("#f5f0fe"),
+	},
+	ThemeSand: {
+		name: "Sand", primary: lipgloss.Color("#ac8230"), secondary: lipgloss.Color("#d4a850"),
+		muted: lipgloss.Color("#7a5a20"), success: lipgloss.Color("#7ab648"),
+		warning: lipgloss.Color("#c8a050"), error: lipgloss.Color("#c86a5a"),
+		highlight: lipgloss.Color("#e8d098"), dimText: lipgloss.Color("#f0e0b8"),
+		brightText: lipgloss.Color("#faf5e8"),
+	},
+	ThemeMint: {
+		name: "Mint", primary: lipgloss.Color("#3a8a6a"), secondary: lipgloss.Color("#5aaa88"),
+		muted: lipgloss.Color("#2a6048"), success: lipgloss.Color("#6ac8a0"),
+		warning: lipgloss.Color("#9ad8b8"), error: lipgloss.Color("#d46a7a"),
+		highlight: lipgloss.Color("#9ad8b8"), dimText: lipgloss.Color("#b8e8d0"),
+		brightText: lipgloss.Color("#eef8f4"),
+	},
+	ThemePeach: {
+		name: "Peach", primary: lipgloss.Color("#b86a3a"), secondary: lipgloss.Color("#d88a5a"),
+		muted: lipgloss.Color("#7a4820"), success: lipgloss.Color("#7ab648"),
+		warning: lipgloss.Color("#d89860"), error: lipgloss.Color("#c85a5a"),
+		highlight: lipgloss.Color("#e8b898"), dimText: lipgloss.Color("#f0d0b8"),
+		brightText: lipgloss.Color("#faf0e8"),
+	},
+	ThemeHaze: {
+		name: "Haze", primary: lipgloss.Color("#5a6a7a"), secondary: lipgloss.Color("#7a8a9a"),
+		muted: lipgloss.Color("#3a4a5a"), success: lipgloss.Color("#6ab8c8"),
+		warning: lipgloss.Color("#9aaaba"), error: lipgloss.Color("#c87a7a"),
+		highlight: lipgloss.Color("#b8c8d8"), dimText: lipgloss.Color("#d0d8e0"),
+		brightText: lipgloss.Color("#eef0f4"),
+	},
+	ThemePebble: {
+		name: "Pebble", primary: lipgloss.Color("#6a6a5e"), secondary: lipgloss.Color("#8a8a7a"),
+		muted: lipgloss.Color("#4a4a40"), success: lipgloss.Color("#8aba5a"),
+		warning: lipgloss.Color("#baba9a"), error: lipgloss.Color("#c87a6a"),
+		highlight: lipgloss.Color("#c8c8b8"), dimText: lipgloss.Color("#d8d8d0"),
+		brightText: lipgloss.Color("#f0f0ea"),
+	},
+	ThemeHoney: {
+		name: "Honey", primary: lipgloss.Color("#b08a30"), secondary: lipgloss.Color("#d0aa50"),
+		muted: lipgloss.Color("#7a6020"), success: lipgloss.Color("#7aba48"),
+		warning: lipgloss.Color("#d0a848"), error: lipgloss.Color("#c86a5a"),
+		highlight: lipgloss.Color("#e8d088"), dimText: lipgloss.Color("#f0e0a8"),
+		brightText: lipgloss.Color("#faf5e0"),
+	},
+	ThemeMoonlight: {
+		name: "Moonlight", primary: lipgloss.Color("#4a6a8a"), secondary: lipgloss.Color("#6a8aaa"),
+		muted: lipgloss.Color("#3a4a6a"), success: lipgloss.Color("#6ab8a8"),
+		warning: lipgloss.Color("#9ab8d0"), error: lipgloss.Color("#c87a7a"),
+		highlight: lipgloss.Color("#b0c8e0"), dimText: lipgloss.Color("#d0dce8"),
+		brightText: lipgloss.Color("#eef4f8"),
+	},
 }
 
 var themeList = []ThemeType{
 	ThemeOcean, ThemeForest, ThemeSunset, ThemeAurora, ThemeLavender,
 	ThemeCoral, ThemeDusk, ThemeSlate, ThemeRose, ThemeAmber,
 	ThemeIndigo, ThemeTeal, ThemeCherry, ThemeSage, ThemeMidnight,
+	ThemeWarm, ThemeMellow, ThemeTwilight, ThemeSand, ThemeMint,
+	ThemePeach, ThemeHaze, ThemePebble, ThemeHoney, ThemeMoonlight,
 }
 
 var currentTheme = ThemeOcean
@@ -1737,9 +1819,10 @@ func (m *model) renderTheme(t Theme) string {
 	curTheme := applyTheme(m.theme)
 	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Render("Current: ") + lipgloss.NewStyle().Foreground(curTheme.primary).Bold(true).Render(curTheme.name)
 
-	s += "\n\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Themes: Ocean, Forest, Sunset, Aurora, Lavender,")
-	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Coral, Dusk, Slate, Rose, Amber, Indigo, Teal,")
-	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Cherry, Sage, Midnight")
+	s += "\n\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Themes: Ocean, Forest, Sunset, Aurora, Lavender, Coral,")
+	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Dusk, Slate, Rose, Amber, Indigo, Teal, Cherry, Sage,")
+	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Midnight, Warm, Mellow, Twilight, Sand, Mint, Peach,")
+	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Haze, Pebble, Honey, Moonlight")
 
 	return lipgloss.NewStyle().Width(w).Padding(0, 2).
 		Render(s)
@@ -1862,7 +1945,24 @@ func getLuminaDir() string {
 	if err != nil {
 		return "."
 	}
-	return filepath.Dir(exe)
+	dir := filepath.Dir(exe)
+	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
+		return dir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return dir
+	}
+	candidates := []string{
+		filepath.Join(home, "Documents", "Lumina"),
+		filepath.Join(home, "Lumina"),
+	}
+	for _, c := range candidates {
+		if info, err := os.Stat(filepath.Join(c, ".git")); err == nil && info.IsDir() {
+			return c
+		}
+	}
+	return dir
 }
 
 func (m *model) update() tea.Cmd {
