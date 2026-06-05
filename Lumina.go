@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -21,6 +22,8 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"gopkg.in/yaml.v3"
 )
+
+const version = "1.1.0"
 
 type Config struct {
 	Theme ThemeType `yaml:"theme"`
@@ -77,30 +80,30 @@ func saveConfig(theme ThemeType) {
 type ThemeType string
 
 const (
-	ThemeOcean    ThemeType = "ocean"
-	ThemeForest   ThemeType = "forest"
-	ThemeSunset   ThemeType = "sunset"
-	ThemeAurora   ThemeType = "aurora"
-	ThemeLavender ThemeType = "lavender"
-	ThemeCoral    ThemeType = "coral"
-	ThemeDusk     ThemeType = "dusk"
-	ThemeSlate    ThemeType = "slate"
-	ThemeRose     ThemeType = "rose"
-	ThemeAmber    ThemeType = "amber"
-	ThemeIndigo   ThemeType = "indigo"
-	ThemeTeal     ThemeType = "teal"
-	ThemeCherry   ThemeType = "cherry"
-	ThemeSage     ThemeType = "sage"
-	ThemeMidnight ThemeType = "midnight"
-	ThemeWarm     ThemeType = "warm"
-	ThemeMellow   ThemeType = "mellow"
-	ThemeTwilight ThemeType = "twilight"
-	ThemeSand     ThemeType = "sand"
-	ThemeMint     ThemeType = "mint"
-	ThemePeach    ThemeType = "peach"
-	ThemeHaze     ThemeType = "haze"
-	ThemePebble   ThemeType = "pebble"
-	ThemeHoney    ThemeType = "honey"
+	ThemeOcean     ThemeType = "ocean"
+	ThemeForest    ThemeType = "forest"
+	ThemeSunset    ThemeType = "sunset"
+	ThemeAurora    ThemeType = "aurora"
+	ThemeLavender  ThemeType = "lavender"
+	ThemeCoral     ThemeType = "coral"
+	ThemeDusk      ThemeType = "dusk"
+	ThemeSlate     ThemeType = "slate"
+	ThemeRose      ThemeType = "rose"
+	ThemeAmber     ThemeType = "amber"
+	ThemeIndigo    ThemeType = "indigo"
+	ThemeTeal      ThemeType = "teal"
+	ThemeCherry    ThemeType = "cherry"
+	ThemeSage      ThemeType = "sage"
+	ThemeMidnight  ThemeType = "midnight"
+	ThemeWarm      ThemeType = "warm"
+	ThemeMellow    ThemeType = "mellow"
+	ThemeTwilight  ThemeType = "twilight"
+	ThemeSand      ThemeType = "sand"
+	ThemeMint      ThemeType = "mint"
+	ThemePeach     ThemeType = "peach"
+	ThemeHaze      ThemeType = "haze"
+	ThemePebble    ThemeType = "pebble"
+	ThemeHoney     ThemeType = "honey"
 	ThemeMoonlight ThemeType = "moonlight"
 )
 
@@ -427,6 +430,8 @@ type model struct {
 	cpuPercent   float64
 	prevCPUTotal uint64
 	prevCPUIdle  uint64
+	cpuFirstTick bool
+	prevProcCPU  map[int]uint64
 	memTotal     uint64
 	memUsed      uint64
 	memAvail     uint64
@@ -519,7 +524,6 @@ func buildTargets(osID string) []*target {
 
 	targets = append(targets,
 		&target{label: "User Cache", path: filepath.Join(home, ".cache"), selected: false, safe: true},
-		&target{label: "Media Thumbs", path: filepath.Join(home, ".cache/thumbnails"), selected: false, safe: true},
 		&target{label: "User Trash", path: filepath.Join(home, ".local/share/Trash"), selected: false, safe: true},
 	)
 
@@ -573,8 +577,11 @@ func diskUsage(p string) int64 {
 		if err != nil {
 			return nil
 		}
+		if d.Type()&os.ModeSymlink != 0 {
+			return nil
+		}
 		info, err := d.Info()
-		if err != nil || (info.Mode()&os.ModeSymlink != 0) {
+		if err != nil {
 			return nil
 		}
 		if !d.IsDir() {
@@ -723,9 +730,18 @@ func getMemInfo() (totalMB, usedMB, availMB uint64) {
 	}
 
 	if memAvail > 0 {
-		usedMB = (memTotal - memAvail) / 1024
+		if memAvail > memTotal {
+			usedMB = 0
+		} else {
+			usedMB = (memTotal - memAvail) / 1024
+		}
 	} else {
-		usedMB = (memTotal - memFree - buffers - cached - sreclaimable) / 1024
+		free := memFree + buffers + cached + sreclaimable
+		if free > memTotal {
+			usedMB = 0
+		} else {
+			usedMB = (memTotal - free) / 1024
+		}
 	}
 
 	return memTotal / 1024, usedMB, memAvail / 1024
@@ -975,7 +991,7 @@ func getGPUs() []gpuInfo {
 	return gpus
 }
 
-func getProcesses(memTotalMB uint64) []procInfo {
+func getProcesses(memTotalMB uint64, prevProcCPU map[int]uint64, clkTck uint64) []procInfo {
 	pidRe := regexp.MustCompile(`^\d+$`)
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -983,18 +999,6 @@ func getProcesses(memTotalMB uint64) []procInfo {
 	}
 
 	var procs []procInfo
-	pageSize := uint64(os.Getpagesize())
-
-	uptimeSec := uint64(0)
-	if data, err := os.ReadFile("/proc/uptime"); err == nil {
-		flds := strings.Fields(strings.TrimSpace(string(data)))
-		if len(flds) > 0 {
-			f, _ := strconv.ParseFloat(flds[0], 64)
-			uptimeSec = uint64(f)
-		}
-	}
-
-	clkTck := uint64(100)
 
 	for _, e := range entries {
 		if !pidRe.MatchString(e.Name()) {
@@ -1025,17 +1029,23 @@ func getProcesses(memTotalMB uint64) []procInfo {
 		}
 
 		state := fields[0]
+		pageSize := uint64(os.Getpagesize())
 		utime, _ := strconv.ParseUint(fields[11], 10, 64)
 		stime, _ := strconv.ParseUint(fields[12], 10, 64)
 		rss, _ := strconv.ParseUint(fields[21], 10, 64)
-		starttime, _ := strconv.ParseUint(fields[19], 10, 64)
 
 		totalTime := utime + stime
-		seconds := uptimeSec - (starttime / clkTck)
 		var cpuPct float64
-		if seconds > 0 {
-			cpuPct = float64(totalTime) / float64(clkTck) / float64(seconds) * 100
+		if prevTotal, ok := prevProcCPU[pid]; ok && prevTotal > 0 {
+			dt := totalTime - prevTotal
+			cpuPct = float64(dt) / float64(clkTck) / 1.0 * 100
+			if cpuPct > 100 {
+				cpuPct = 100
+			}
+		} else {
+			cpuPct = 0
 		}
+		prevProcCPU[pid] = totalTime
 		if cpuPct > 100 {
 			cpuPct = 100
 		}
@@ -1179,13 +1189,20 @@ func scanTarget(path string) tea.Cmd {
 
 		var entries []fileEntry
 		baseDepth := len(strings.Split(path, string(os.PathSeparator)))
+		done := false
 
 		_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
+			if done {
+				return filepath.SkipAll
+			}
+			if d.Type()&os.ModeSymlink != 0 {
+				return nil
+			}
 			info, err := d.Info()
-			if err != nil || (info.Mode()&os.ModeSymlink != 0) {
+			if err != nil {
 				return nil
 			}
 
@@ -1205,7 +1222,8 @@ func scanTarget(path string) tea.Cmd {
 			})
 
 			if len(entries) >= 40 {
-				return filepath.SkipDir
+				done = true
+				return filepath.SkipAll
 			}
 			return nil
 		})
@@ -1335,6 +1353,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if m.tab == 0 {
 				m.targets[m.index].selected = !m.targets[m.index].selected
 			}
+			return m, nil
 		case "enter":
 			if m.tab == 0 && m.state == "ready" {
 				m.confirming = true
@@ -1384,8 +1403,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 	case sysMonitorMsg:
 		m.mu.Lock()
-		cpuPct := calcCPUPercent(m.prevCPUTotal, m.prevCPUIdle)
-		m.cpuPercent = cpuPct
+		if !m.cpuFirstTick {
+			cpuPct := calcCPUPercent(m.prevCPUTotal, m.prevCPUIdle)
+			m.cpuPercent = cpuPct
+		} else {
+			m.cpuFirstTick = false
+		}
 		t, i, _ := getCPUUsage()
 		m.prevCPUTotal = t
 		m.prevCPUIdle = i
@@ -1412,12 +1435,54 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		m.uptime = getUptime()
 		m.loadAvg = getLoadAvg()
-		m.procs = getProcesses(mt)
+		m.procs = getProcesses(mt, m.prevProcCPU, 100)
 		m.gpus = getGPUs()
 		m.mu.Unlock()
 		return m, startMonitor()
 	}
 	return m, nil
+}
+
+type modelView struct {
+	theme            ThemeType
+	tab              int
+	updateStatus     string
+	updateOutput     string
+	confirming       bool
+	osIcon           string
+	osInfo           string
+	index            int
+	state            string
+	targets          []*target
+	sizing           bool
+	scanPending      bool
+	scanDone         bool
+	fileEntries      []fileEntry
+	fileCount        int
+	progressPct      float64
+	countdown        int
+	cleanErrors      []string
+	hostName         string
+	kernelVer        string
+	numCPUs          int
+	uptime           uint64
+	loadAvg          []float64
+	cpuPercent       float64
+	memTotal         uint64
+	memUsed          uint64
+	memPercent       float64
+	swapTotal        uint64
+	swapUsed         uint64
+	swapPercent      float64
+	diskTotal        uint64
+	diskUsed         uint64
+	diskPct          float64
+	procs            []procInfo
+	gpus             []gpuInfo
+	themeIndex       int
+	spinnerView      string
+	progressView     string
+	progressDoneView string
 }
 
 func (m *model) View() string {
@@ -1426,24 +1491,65 @@ func (m *model) View() string {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
+	v := modelView{
+		theme:            m.theme,
+		tab:              m.tab,
+		updateStatus:     m.updateStatus,
+		updateOutput:     m.updateOutput,
+		confirming:       m.confirming,
+		osIcon:           m.osIcon,
+		osInfo:           m.osInfo,
+		index:            m.index,
+		state:            m.state,
+		targets:          m.targets,
+		sizing:           m.sizing,
+		scanPending:      m.scanPending,
+		scanDone:         m.scanDone,
+		fileEntries:      m.fileEntries,
+		fileCount:        m.fileCount,
+		progressPct:      m.progressPct,
+		countdown:        m.countdown,
+		cleanErrors:      m.cleanErrors,
+		hostName:         m.hostName,
+		kernelVer:        m.kernelVer,
+		numCPUs:          m.numCPUs,
+		uptime:           m.uptime,
+		loadAvg:          m.loadAvg,
+		cpuPercent:       m.cpuPercent,
+		memTotal:         m.memTotal,
+		memUsed:          m.memUsed,
+		memPercent:       m.memPercent,
+		swapTotal:        m.swapTotal,
+		swapUsed:         m.swapUsed,
+		swapPercent:      m.swapPercent,
+		diskTotal:        m.diskTotal,
+		diskUsed:         m.diskUsed,
+		diskPct:          m.diskPct,
+		procs:            m.procs,
+		gpus:             m.gpus,
+		themeIndex:       m.themeIndex,
+		spinnerView:      m.spinner.View(),
+		progressView:     m.progress.ViewAs(m.progressPct),
+		progressDoneView: m.progress.ViewAs(1.0),
+	}
+	m.mu.Unlock()
 
-	t := applyTheme(m.theme)
+	t := applyTheme(v.theme)
 
-	header := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s\n",
+	headerLines := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s\n",
 		themeHeader(t).Render(" LUMINA INSPECTOR "),
-		m.osIcon, m.osInfo,
+		v.osIcon, v.osInfo,
 		lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Bold(true).Render("DEV : Reham"),
-		tabStyle(m.tab == 0, t).Render(" Cleaner "),
-		tabStyle(m.tab == 1, t).Render(" Monitor "),
-		tabStyle(m.tab == 2, t).Render(" Theme "))
+		tabStyle(v.tab == 0, t).Render(" Cleaner "),
+		tabStyle(v.tab == 1, t).Render(" Monitor "),
+		tabStyle(v.tab == 2, t).Render(" Theme "))
 
 	var content string
-	if m.updateStatus == "updating" {
+	if v.updateStatus == "updating" {
 		dialogContent := fmt.Sprintf(
 			"%s\n\n%s\n\nUpdating Lumina...\nPlease wait.",
 			themeTitle(t).Render("⚠ Updating"),
-			m.spinner.View(),
+			v.spinnerView,
 		)
 		dialog := lipgloss.NewStyle().
 			Border(lipgloss.DoubleBorder()).
@@ -1451,17 +1557,17 @@ func (m *model) View() string {
 			Padding(2, 4).
 			Render(dialogContent)
 		content = dialog
-	} else if m.updateStatus == "done" || m.updateStatus == "error" {
+	} else if v.updateStatus == "done" || v.updateStatus == "error" {
 		title := "✔ Update Complete"
 		col := t.success
-		if m.updateStatus == "error" {
+		if v.updateStatus == "error" {
 			title = "✘ Update Failed"
 			col = t.error
 		}
 		dialogContent := fmt.Sprintf(
 			"%s\n\n%s\n\n%s",
 			lipgloss.NewStyle().Foreground(col).Bold(true).Render(title),
-			m.updateOutput,
+			v.updateOutput,
 			lipgloss.NewStyle().Foreground(t.muted).Render("Press any key to continue"),
 		)
 		dialog := lipgloss.NewStyle().
@@ -1470,8 +1576,8 @@ func (m *model) View() string {
 			Padding(1, 2).
 			Render(dialogContent)
 		content = dialog
-	} else if m.tab == 0 {
-		if m.confirming {
+	} else if v.tab == 0 {
+		if v.confirming {
 			dialogContent := fmt.Sprintf(
 				"%s\n\nAre you sure you want to clean\nthe selected targets?\nThis action cannot be undone.\n\n%s  %s",
 				themeTitle(t).Render("⚠ Confirm Clean"),
@@ -1485,15 +1591,15 @@ func (m *model) View() string {
 				Render(dialogContent)
 			content = dialog
 		} else {
-			left := m.renderLeft(t)
-			right := m.renderRight(t)
+			left := renderLeft(t, v)
+			right := renderRight(t, v)
 			split := lipgloss.JoinHorizontal(lipgloss.Top, left, right)
-			content = header + "\n" + split
+			content = headerLines + "\n" + split
 		}
-	} else if m.tab == 1 {
-		content = header + "\n" + m.renderMonitor(t)
+	} else if v.tab == 1 {
+		content = headerLines + "\n" + renderMonitor(t, v)
 	} else {
-		content = header + "\n" + m.renderTheme(t)
+		content = headerLines + "\n" + renderTheme(t, v)
 	}
 
 	bordered := themeBorder(t).Render(content)
@@ -1539,17 +1645,17 @@ func tabStyle(active bool, t Theme) lipgloss.Style {
 	return themeTabMuted(t)
 }
 
-func (m *model) renderLeft(t Theme) string {
+func renderLeft(t Theme, v modelView) string {
 	var s string
-	if m.sizing {
-		s = fmt.Sprintf("%s Scanning...\n\n", m.spinner.View())
+	if v.sizing {
+		s = fmt.Sprintf("%s Scanning...\n\n", v.spinnerView)
 	} else {
 		s = "Select to purge (Space/Enter):\n\n"
 	}
 
-	for i, tg := range m.targets {
+	for i, tg := range v.targets {
 		ptr := "  "
-		if m.index == i {
+		if v.index == i {
 			ptr = "> "
 		}
 		box := "[ ]"
@@ -1558,7 +1664,7 @@ func (m *model) renderLeft(t Theme) string {
 		}
 		sz := formatBytes(tg.bytes)
 		line := fmt.Sprintf("%s%s %-16s %s", ptr, box, tg.label, sz)
-		if m.index == i {
+		if v.index == i {
 			s += lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Render(line) + "\n"
 			s += "    " + themePath(t).Render("↳ "+tg.path) + "\n"
 		} else {
@@ -1566,36 +1672,36 @@ func (m *model) renderLeft(t Theme) string {
 		}
 	}
 
-	if m.state == "running" {
+	if v.state == "running" {
 		s = fmt.Sprintf("%s Cleaning...\n\n%s",
-			m.spinner.View(), m.progress.ViewAs(m.progressPct))
+			v.spinnerView, v.progressView)
 	}
-	if m.state == "cleaning" {
+	if v.state == "cleaning" {
 		s = fmt.Sprintf("%s Running cleaners...\n\n%s",
-			m.spinner.View(), m.progress.ViewAs(1.0))
+			v.spinnerView, v.progressDoneView)
 	}
-	if m.state == "done" {
+	if v.state == "done" {
 		s = themeTitle(t).Render("✔ System Cleaned!") + "\n"
-		for _, err := range m.cleanErrors {
+		for _, err := range v.cleanErrors {
 			s += lipgloss.NewStyle().Foreground(t.error).Render("  ⚠ "+err) + "\n"
 		}
-		s += fmt.Sprintf("\n   Exiting in %d...\n\n", m.countdown)
+		s += fmt.Sprintf("\n   Exiting in %d...\n\n", v.countdown)
 		s += lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Italic(true).Render("   byeee")
 	}
 
 	return lipgloss.NewStyle().Width(32).Render(s)
 }
 
-func (m *model) renderRight(t Theme) string {
+func renderRight(t Theme, v modelView) string {
 	w := 48
 
-	if m.scanPending {
+	if v.scanPending {
 		return lipgloss.NewStyle().Width(w).Height(16).Padding(0, 0, 0, 1).
 			Border(lipgloss.ThickBorder()).BorderForeground(themeTitle(t).GetForeground()).
-			Render("\n\n  " + m.spinner.View() + " scanning files...")
+			Render("\n\n  " + v.spinnerView + " scanning files...")
 	}
 
-	if len(m.fileEntries) == 0 {
+	if len(v.fileEntries) == 0 {
 		return lipgloss.NewStyle().Width(w).Height(16).Padding(0, 0, 0, 1).
 			Border(lipgloss.ThickBorder()).BorderForeground(themeTitle(t).GetForeground()).
 			Render("\n\n  No files found")
@@ -1603,7 +1709,7 @@ func (m *model) renderRight(t Theme) string {
 
 	var dirs []string
 	var files []string
-	for _, e := range m.fileEntries {
+	for _, e := range v.fileEntries {
 		if e.isDir {
 			dirs = append(dirs, e.name)
 		} else {
@@ -1620,8 +1726,8 @@ func (m *model) renderRight(t Theme) string {
 	if len(dirs) < dirLimit {
 		dirLimit = len(dirs)
 	}
-	if m.fileCount < dirLimit {
-		dirLimit = m.fileCount
+	if v.fileCount < dirLimit {
+		dirLimit = v.fileCount
 	}
 	for i := 0; i < dirLimit; i++ {
 		icon := "  "
@@ -1629,7 +1735,7 @@ func (m *model) renderRight(t Theme) string {
 		if len(name) > 28 {
 			name = name[:25] + "..."
 		}
-		if i == dirLimit-1 && !m.scanDone {
+		if i == dirLimit-1 && !v.scanDone {
 			content += themeGlow(t).Render(icon+name) + "\n"
 		} else {
 			content += themeFolder(t).Render(icon) + " " + themeFile(t).Render(name) + "\n"
@@ -1641,7 +1747,7 @@ func (m *model) renderRight(t Theme) string {
 
 	content += "\n" + themeTitle(t).Render(" Files ") + " " + strings.Repeat("─", 33) + "\n"
 
-	fileLimit := m.fileCount - dirLimit
+	fileLimit := v.fileCount - dirLimit
 	if fileLimit < 0 {
 		fileLimit = 0
 	}
@@ -1664,7 +1770,7 @@ func (m *model) renderRight(t Theme) string {
 			display = display[:colWidth-2]
 		}
 
-		if i == showCount-1 && !m.scanDone {
+		if i == showCount-1 && !v.scanDone {
 			display = themeGlow(t).Render(display)
 		}
 
@@ -1688,8 +1794,8 @@ func (m *model) renderRight(t Theme) string {
 		content += lipgloss.NewStyle().Foreground(t.muted).Render(fmt.Sprintf("    ... and %d more files", len(files)-showCount)) + "\n"
 	}
 
-	if !m.scanDone {
-		content += "\n  " + m.spinner.View() + " loading..."
+	if !v.scanDone {
+		content += "\n  " + v.spinnerView + " loading..."
 	}
 
 	stats := fmt.Sprintf("%d folders  •  %d files", len(dirs), len(files))
@@ -1701,21 +1807,21 @@ func (m *model) renderRight(t Theme) string {
 		Render(content)
 }
 
-func (m *model) renderMonitor(t Theme) string {
+func renderMonitor(t Theme, v modelView) string {
 	w := 88
 	var s string
 
 	s += themeTitle(t).Render(" System Information ") + "\n\n"
 
-	s += fmt.Sprintf("  %-12s %s\n", "Hostname:", themeGlow(t).Render(m.hostName))
-	s += fmt.Sprintf("  %-12s %s\n", "Kernel:", themeGlow(t).Render(m.kernelVer))
-	s += fmt.Sprintf("  %-12s %s\n", "OS:", themeGlow(t).Render(m.osInfo))
-	s += fmt.Sprintf("  %-12s %s\n", "CPUs:", themeGlow(t).Render(fmt.Sprintf("%d", m.numCPUs)))
+	s += fmt.Sprintf("  %-12s %s\n", "Hostname:", themeGlow(t).Render(v.hostName))
+	s += fmt.Sprintf("  %-12s %s\n", "Kernel:", themeGlow(t).Render(v.kernelVer))
+	s += fmt.Sprintf("  %-12s %s\n", "OS:", themeGlow(t).Render(v.osInfo))
+	s += fmt.Sprintf("  %-12s %s\n", "CPUs:", themeGlow(t).Render(fmt.Sprintf("%d", v.numCPUs)))
 
 	gpuStr := "None detected"
-	if len(m.gpus) > 0 {
+	if len(v.gpus) > 0 {
 		var gpuNames []string
-		for _, g := range m.gpus {
+		for _, g := range v.gpus {
 			entry := g.name
 			if g.curFreqMHz > 0 || g.maxFreqMHz > 0 {
 				entry += fmt.Sprintf(" (%d/%d MHz)", g.curFreqMHz, g.maxFreqMHz)
@@ -1726,34 +1832,34 @@ func (m *model) renderMonitor(t Theme) string {
 	}
 	s += fmt.Sprintf("  %-12s %s\n", "GPU:", themeGlow(t).Render(gpuStr))
 
-	s += fmt.Sprintf("  %-12s %s\n", "Uptime:", themeGlow(t).Render(formatUptime(m.uptime)))
-	s += fmt.Sprintf("  %-12s %.2f / %.2f / %.2f\n", "Load Avg:", m.loadAvg[0], m.loadAvg[1], m.loadAvg[2])
+	s += fmt.Sprintf("  %-12s %s\n", "Uptime:", themeGlow(t).Render(formatUptime(v.uptime)))
+	s += fmt.Sprintf("  %-12s %.2f / %.2f / %.2f\n", "Load Avg:", v.loadAvg[0], v.loadAvg[1], v.loadAvg[2])
 
 	s += "\n" + themeTitle(t).Render(" Resources ") + "\n\n"
 
-	cpuBar := m.renderBar(m.cpuPercent, 36, t)
-	memBar := m.renderBar(m.memPercent, 36, t)
-	swapBar := m.renderBar(m.swapPercent, 36, t)
-	diskBar := m.renderBar(m.diskPct, 36, t)
+	cpuBar := renderBar(v.cpuPercent, 36, t)
+	memBar := renderBar(v.memPercent, 36, t)
+	swapBar := renderBar(v.swapPercent, 36, t)
+	diskBar := renderBar(v.diskPct, 36, t)
 
-	memLabel := fmt.Sprintf("%d / %d MB", m.memUsed, m.memTotal)
+	memLabel := fmt.Sprintf("%d / %d MB", v.memUsed, v.memTotal)
 	swapLabel := "No Swap"
-	if m.swapTotal > 0 {
-		swapLabel = fmt.Sprintf("%d / %d MB", m.swapUsed, m.swapTotal)
+	if v.swapTotal > 0 {
+		swapLabel = fmt.Sprintf("%d / %d MB", v.swapUsed, v.swapTotal)
 	}
-	diskLabel := fmt.Sprintf("%d / %d GB", m.diskUsed, m.diskTotal)
+	diskLabel := fmt.Sprintf("%d / %d GB", v.diskUsed, v.diskTotal)
 
-	s += fmt.Sprintf("  CPU:   %s  %5.1f%%\n", cpuBar, m.cpuPercent)
-	s += fmt.Sprintf("  RAM:   %s  %5.1f%%  %s\n", memBar, m.memPercent, m.renderSideInfo(memLabel, m.memPercent, t))
-	s += fmt.Sprintf("  Swap:  %s  %s\n", swapBar, m.renderSideInfo(swapLabel, m.swapPercent, t))
-	s += fmt.Sprintf("  Disk:  %s  %5.1f%%  %s\n", diskBar, m.diskPct, m.renderSideInfo(diskLabel, m.diskPct, t))
+	s += fmt.Sprintf("  CPU:   %s  %5.1f%%\n", cpuBar, v.cpuPercent)
+	s += fmt.Sprintf("  RAM:   %s  %5.1f%%  %s\n", memBar, v.memPercent, renderSideInfo(memLabel, v.memPercent, t))
+	s += fmt.Sprintf("  Swap:  %s  %s\n", swapBar, renderSideInfo(swapLabel, v.swapPercent, t))
+	s += fmt.Sprintf("  Disk:  %s  %5.1f%%  %s\n", diskBar, v.diskPct, renderSideInfo(diskLabel, v.diskPct, t))
 
 	s += "\n" + themeTitle(t).Render(" Top Processes (by RAM) ") + "\n\n"
 
 	s += fmt.Sprintf("  %-7s %-18s %6s  %8s  %5s\n", "PID", "NAME", "STATE", "MEM MB", "MEM%")
 	s += lipgloss.NewStyle().Foreground(t.muted).Render("  ─────────────────────────────────────────────────") + "\n"
 
-	for _, p := range m.procs {
+	for _, p := range v.procs {
 		name := p.command
 		if len(name) > 16 {
 			name = name[:13] + "..."
@@ -1769,7 +1875,7 @@ func (m *model) renderMonitor(t Theme) string {
 		Render(s)
 }
 
-func (m *model) renderTheme(t Theme) string {
+func renderTheme(t Theme, v modelView) string {
 	w := 88
 	var s string
 
@@ -1778,8 +1884,8 @@ func (m *model) renderTheme(t Theme) string {
 	s += lipgloss.NewStyle().Foreground(t.muted).Render("  Press Tab to go back\n\n")
 
 	start := 0
-	if m.themeIndex >= 5 {
-		start = m.themeIndex - 4
+	if v.themeIndex >= 5 {
+		start = v.themeIndex - 4
 	}
 	end := start + 9
 	if end > len(themeList) {
@@ -1796,11 +1902,11 @@ func (m *model) renderTheme(t Theme) string {
 		ptr := "  "
 		mark := "  "
 
-		if i == m.themeIndex {
+		if i == v.themeIndex {
 			ptr = "▶ "
 		}
 
-		if m.theme == themeList[i] {
+		if v.theme == themeList[i] {
 			mark = "● "
 		}
 
@@ -1816,7 +1922,7 @@ func (m *model) renderTheme(t Theme) string {
 
 	s += "\n" + lipgloss.NewStyle().Foreground(t.muted).Render(" ──────────────────────────────────────────────────────────────")
 
-	curTheme := applyTheme(m.theme)
+	curTheme := applyTheme(v.theme)
 	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Render("Current: ") + lipgloss.NewStyle().Foreground(curTheme.primary).Bold(true).Render(curTheme.name)
 
 	s += "\n\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Themes: Ocean, Forest, Sunset, Aurora, Lavender, Coral,")
@@ -1845,7 +1951,7 @@ func procState(s string, t Theme) string {
 	}
 }
 
-func (m *model) renderBar(pct float64, width int, t Theme) string {
+func renderBar(pct float64, width int, t Theme) string {
 	if pct > 100 {
 		pct = 100
 	}
@@ -1886,7 +1992,7 @@ func (m *model) renderBar(pct float64, width int, t Theme) string {
 	return lipgloss.NewStyle().Foreground(col).Render(b.String())
 }
 
-func (m *model) renderSideInfo(text string, pct float64, t Theme) string {
+func renderSideInfo(text string, pct float64, t Theme) string {
 	var col lipgloss.Color
 	if pct > 85 {
 		col = t.error
@@ -1903,6 +2009,9 @@ func (m *model) safeClean(t *target) error {
 		return nil
 	}
 	if strings.HasPrefix(t.path, "/nix") {
+		return nil
+	}
+	if t.path == "/tmp" {
 		return nil
 	}
 
@@ -1941,6 +2050,15 @@ func commandExists(cmd string) bool {
 }
 
 func getLuminaDir() string {
+	if d := os.Getenv("LUMINA_DIR"); d != "" {
+		return d
+	}
+	cwd, err := os.Getwd()
+	if err == nil {
+		if info, err := os.Stat(filepath.Join(cwd, ".git")); err == nil && info.IsDir() {
+			return cwd
+		}
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "."
@@ -1981,6 +2099,15 @@ func (m *model) update() tea.Cmd {
 		buildOut, err := buildCmd.CombinedOutput()
 		if err != nil {
 			return updateMsg{success: false, output: fmt.Sprintf("build failed:\n%s", string(buildOut))}
+		}
+
+		exe, err := os.Executable()
+		if err == nil {
+			_ = os.Remove(exe)
+			input, _ := os.ReadFile(filepath.Join(dir, "lumina"))
+			if input != nil {
+				_ = os.WriteFile(exe, input, 0755)
+			}
 		}
 
 		return updateMsg{success: true, output: fmt.Sprintf("git pull:\n%s\nbuild: success", string(pullOut))}
@@ -2024,29 +2151,23 @@ func (m *model) clean() tea.Cmd {
 		case "alpine":
 			cmds = [][]string{{"apk", "cache", "clean"}}
 		case "nixos":
-			cmds = [][]string{{"nix-collect-garbage", "-d"}}
+			cmds = [][]string{{"timeout", "30", "nix-collect-garbage", "-d"}}
 		case "opensuse", "opensuse-leap", "opensuse-tumbleweed":
 			cmds = [][]string{{"zypper", "clean", "-a"}}
 		case "gentoo":
 			cmds = [][]string{{"eclean-distfiles"}}
 		default:
-			entries, err := os.ReadDir("/tmp")
-			if err == nil {
-				for _, e := range entries {
-					_ = os.RemoveAll(filepath.Join("/tmp", e.Name()))
-				}
-			}
 		}
 
 		for _, args := range cmds {
 			cmd := exec.Command(args[0], args[1:]...)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				msg := strings.TrimSpace(string(out))
-				if msg != "" {
-					errs = append(errs, fmt.Sprintf("%s: %s", args[0], msg))
-				} else {
-					errs = append(errs, fmt.Sprintf("%s: %v", args[0], err))
-				}
+			out, err := cmd.CombinedOutput()
+			outStr := strings.TrimSpace(string(out))
+			if outStr != "" {
+				errs = append(errs, fmt.Sprintf("%s: %s", args[0], outStr))
+			}
+			if err != nil {
+				errs = append(errs, fmt.Sprintf("%s: %v", args[0], err))
 			}
 		}
 
@@ -2070,29 +2191,22 @@ func animTick() tea.Cmd {
 }
 
 func main() {
+	showVersion := flag.Bool("version", false, "show version")
+	flag.Parse()
+	if *showVersion {
+		fmt.Println("Lumina v" + version)
+		return
+	}
+
 	if len(os.Args) > 1 && os.Args[1] == "--update" {
-		dir := getLuminaDir()
-		fmt.Println("Updating Lumina...")
-
-		pullCmd := exec.Command("git", "pull")
-		pullCmd.Dir = dir
-		pullOut, err := pullCmd.CombinedOutput()
-		fmt.Print(string(pullOut))
-		if err != nil {
-			fmt.Printf("git pull failed: %v\n", err)
-			os.Exit(1)
+		m := &model{spinner: spinner.New(spinner.WithSpinner(spinner.Dot)), prevProcCPU: make(map[int]uint64)}
+		msg := m.update()()
+		if umsg, ok := msg.(updateMsg); ok {
+			fmt.Print(umsg.output)
+			if !umsg.success {
+				os.Exit(1)
+			}
 		}
-
-		buildCmd := exec.Command("go", "build", "-o", "lumina", ".")
-		buildCmd.Dir = dir
-		buildOut, err := buildCmd.CombinedOutput()
-		fmt.Print(string(buildOut))
-		if err != nil {
-			fmt.Printf("build failed: %v\n", err)
-			os.Exit(1)
-		}
-
-		fmt.Println("Lumina updated successfully!")
 		return
 	}
 
@@ -2126,6 +2240,8 @@ func main() {
 		sizing:       true,
 		prevCPUTotal: t,
 		prevCPUIdle:  i,
+		cpuFirstTick: true,
+		prevProcCPU:  make(map[int]uint64),
 		numCPUs:      nCPUs,
 		loadAvg:      []float64{0, 0, 0},
 		theme:        cfg.Theme,

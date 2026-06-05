@@ -1,5 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/go-1.26%2B-%2300ADD8?style=for-the-badge&logo=go" alt="Go 1.26+">
+  <img src="https://img.shields.io/badge/version-1.1.0-%2300ADD8?style=for-the-badge" alt="v1.1.0">
   <img src="https://img.shields.io/badge/license-MIT-%23blue?style=for-the-badge" alt="MIT">
   <img src="https://img.shields.io/badge/status-beta-%23orange?style=for-the-badge" alt="Beta">
 </p>
@@ -29,6 +30,10 @@ git clone https://github.com/PzN2s/Lumina
 cd Lumina
 go build -o lumina .
 sudo ./lumina
+```
+
+```bash
+lumina --version   # show version
 ```
 
 To run it from anywhere (add to your PATH):
