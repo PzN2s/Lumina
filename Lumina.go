@@ -2,8 +2,11 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -23,7 +26,41 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
+
+var allowedCleanPaths = map[string]bool{
+	"user_cache":   true,
+	"user_trash":   true,
+	"apt_cache":    true,
+	"dnf_cache":    true,
+	"pacman_cache": true,
+	"void_cache":   true,
+	"apk_cache":    true,
+	"distfiles":    true,
+	"nix_gc":       true,
+	"zypper_cache": true,
+	"system_temp":  true,
+}
+
+var pathValidators = map[string]func(string) bool{
+	"user_cache": func(p string) bool {
+		home, _ := os.UserHomeDir()
+		return p == filepath.Join(home, ".cache")
+	},
+	"user_trash": func(p string) bool {
+		home, _ := os.UserHomeDir()
+		return p == filepath.Join(home, ".local/share/Trash")
+	},
+	"apt_cache":    func(p string) bool { return p == "/var/cache/apt/archives" },
+	"dnf_cache":    func(p string) bool { return p == "/var/cache/dnf" },
+	"pacman_cache": func(p string) bool { return p == "/var/cache/pacman/pkg" },
+	"void_cache":   func(p string) bool { return p == "/var/cache/xbps" },
+	"apk_cache":    func(p string) bool { return p == "/var/cache/apk" },
+	"distfiles":    func(p string) bool { return p == "/var/cache/distfiles" },
+	"nix_gc":       func(p string) bool { return p == "/nix/store" },
+	"zypper_cache": func(p string) bool { return p == "/var/cache/zypp/packages" },
+	"system_temp":  func(p string) bool { return p == "/tmp" },
+}
 
 type Config struct {
 	Theme ThemeType `yaml:"theme"`
@@ -35,7 +72,9 @@ func getConfigPath() string {
 		return ""
 	}
 	configDir := filepath.Join(home, ".config", "lumina")
-	_ = os.MkdirAll(configDir, 0755)
+	if err := os.MkdirAll(configDir, 0750); err != nil {
+		return ""
+	}
 	return filepath.Join(configDir, "config.yaml")
 }
 
@@ -62,19 +101,22 @@ func loadConfig() Config {
 	return cfg
 }
 
-func saveConfig(theme ThemeType) {
+func saveConfig(theme ThemeType) error {
 	path := getConfigPath()
 	if path == "" {
-		return
+		return fmt.Errorf("failed to get config path")
 	}
 
 	cfg := Config{Theme: theme}
 	data, err := yaml.Marshal(&cfg)
 	if err != nil {
-		return
+		return err
 	}
 
-	_ = os.WriteFile(path, data, 0644)
+	if err := os.WriteFile(path, data, 0600); err != nil {
+		return err
+	}
+	return nil
 }
 
 type ThemeType string
@@ -314,65 +356,65 @@ func applyTheme(t ThemeType) Theme {
 
 func themeHeader(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.brightText).
-		Background(t.primary).
-		Padding(0, 2).
-		Bold(true)
+	Foreground(t.brightText).
+	Background(t.primary).
+	Padding(0, 2).
+	Bold(true)
 }
 
 func themeBorder(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Border(lipgloss.RoundedBorder()).
-		BorderForeground(t.primary).
-		Padding(1, 2)
+	Border(lipgloss.RoundedBorder()).
+	BorderForeground(t.primary).
+	Padding(1, 2)
 }
 
 func themePath(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.muted).
-		Italic(true)
+	Foreground(t.muted).
+	Italic(true)
 }
 
 func themeFolder(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.secondary).
-		Bold(true)
+	Foreground(t.secondary).
+	Bold(true)
 }
 
 func themeFile(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.dimText)
+	Foreground(t.dimText)
 }
 
 func themeGlow(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.highlight).
-		Bold(true)
+	Foreground(t.highlight).
+	Bold(true)
 }
 
 func themeTitle(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.warning).
-		Bold(true)
+	Foreground(t.warning).
+	Bold(true)
 }
 
 func themeTabActive(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Background(t.primary).
-		Foreground(t.brightText).
-		Bold(true).
-		Padding(0, 1)
+	Background(t.primary).
+	Foreground(t.brightText).
+	Bold(true).
+	Padding(0, 1)
 }
 
 func themeTabMuted(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.dimText).
-		Padding(0, 1)
+	Foreground(t.dimText).
+	Padding(0, 1)
 }
 
 func themeBarLow(t Theme) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(t.success)
+	Foreground(t.success)
 }
 
 type fileEntry struct {
@@ -387,6 +429,7 @@ type target struct {
 	selected bool
 	bytes    int64
 	safe     bool
+	key      string
 }
 
 type procInfo struct {
@@ -484,32 +527,32 @@ func detectOS() (name, icon string) {
 	}
 
 	switch strings.ToLower(id) {
-	case "nixos":
-		icon = ""
-	case "ubuntu", "linuxmint", "pop":
-		icon = ""
-	case "debian", "raspbian":
-		icon = ""
-	case "fedora", "centos", "rocky", "almalinux":
-		icon = ""
-	case "arch", "archarm", "manjaro", "endeavouros", "cachyos":
-		icon = ""
-	case "opensuse", "opensuse-leap", "opensuse-tumbleweed":
-		icon = ""
-	case "void":
-		icon = ""
-	case "gentoo":
-		icon = ""
-	case "alpine":
-		icon = ""
-	case "elementary":
-		icon = ""
-	case "solus":
-		icon = ""
-	case "deepin":
-		icon = ""
-	default:
-		icon = "🐧"
+		case "nixos":
+			icon = ""
+		case "ubuntu", "linuxmint", "pop":
+			icon = ""
+		case "debian", "raspbian":
+			icon = ""
+		case "fedora", "centos", "rocky", "almalinux":
+			icon = ""
+		case "arch", "archarm", "manjaro", "endeavouros", "cachyos":
+			icon = ""
+		case "opensuse", "opensuse-leap", "opensuse-tumbleweed":
+			icon = ""
+		case "void":
+			icon = ""
+		case "gentoo":
+			icon = ""
+		case "alpine":
+			icon = ""
+		case "elementary":
+			icon = ""
+		case "solus":
+			icon = ""
+		case "deepin":
+			icon = ""
+		default:
+			icon = "🐧"
 	}
 
 	return name, icon
@@ -523,52 +566,63 @@ func buildTargets(osID string) []*target {
 	var targets []*target
 
 	targets = append(targets,
-		&target{label: "User Cache", path: filepath.Join(home, ".cache"), selected: false, safe: true},
-		&target{label: "User Trash", path: filepath.Join(home, ".local/share/Trash"), selected: false, safe: true},
+			 &target{label: "User Cache", path: filepath.Join(home, ".cache"), selected: false, safe: true, key: "user_cache"},
+			 &target{label: "User Trash", path: filepath.Join(home, ".local/share/Trash"), selected: false, safe: true, key: "user_trash"},
 	)
 
 	switch strings.ToLower(osID) {
-	case "ubuntu", "debian", "linuxmint", "pop", "zorin", "elementary", "deepin", "raspbian":
-		targets = append(targets,
-			&target{label: "APT Cache", path: "/var/cache/apt/archives", selected: false, safe: true},
-		)
-	case "fedora", "centos", "rocky", "almalinux":
-		targets = append(targets,
-			&target{label: "DNF Cache", path: "/var/cache/dnf", selected: false, safe: true},
-		)
-	case "arch", "archarm", "manjaro", "endeavouros", "cachyos":
-		targets = append(targets,
-			&target{label: "Pacman Cache", path: "/var/cache/pacman/pkg", selected: false, safe: true},
-		)
-	case "void":
-		targets = append(targets,
-			&target{label: "Void Cache", path: "/var/cache/xbps", selected: false, safe: true},
-		)
-	case "alpine":
-		targets = append(targets,
-			&target{label: "APK Cache", path: "/var/cache/apk", selected: false, safe: true},
-		)
-	case "gentoo":
-		targets = append(targets,
-			&target{label: "Distfiles", path: "/var/cache/distfiles", selected: false, safe: true},
-		)
-	case "nixos":
-		targets = append(targets,
-			&target{label: "Nix GC", path: "/nix/store", selected: false, safe: true},
-		)
-	case "opensuse", "opensuse-leap", "opensuse-tumbleweed":
-		targets = append(targets,
-			&target{label: "Zypper Cache", path: "/var/cache/zypp/packages", selected: false, safe: true},
-		)
+		case "ubuntu", "debian", "linuxmint", "pop", "zorin", "elementary", "deepin", "raspbian":
+			targets = append(targets,
+					 &target{label: "APT Cache", path: "/var/cache/apt/archives", selected: false, safe: true, key: "apt_cache"},
+			)
+		case "fedora", "centos", "rocky", "almalinux":
+			targets = append(targets,
+					 &target{label: "DNF Cache", path: "/var/cache/dnf", selected: false, safe: true, key: "dnf_cache"},
+			)
+		case "arch", "archarm", "manjaro", "endeavouros", "cachyos":
+			targets = append(targets,
+					 &target{label: "Pacman Cache", path: "/var/cache/pacman/pkg", selected: false, safe: true, key: "pacman_cache"},
+			)
+		case "void":
+			targets = append(targets,
+					 &target{label: "Void Cache", path: "/var/cache/xbps", selected: false, safe: true, key: "void_cache"},
+			)
+		case "alpine":
+			targets = append(targets,
+					 &target{label: "APK Cache", path: "/var/cache/apk", selected: false, safe: true, key: "apk_cache"},
+			)
+		case "gentoo":
+			targets = append(targets,
+					 &target{label: "Distfiles", path: "/var/cache/distfiles", selected: false, safe: true, key: "distfiles"},
+			)
+		case "nixos":
+			targets = append(targets,
+					 &target{label: "Nix GC", path: "/nix/store", selected: false, safe: true, key: "nix_gc"},
+			)
+		case "opensuse", "opensuse-leap", "opensuse-tumbleweed":
+			targets = append(targets,
+					 &target{label: "Zypper Cache", path: "/var/cache/zypp/packages", selected: false, safe: true, key: "zypper_cache"},
+			)
 	}
 
 	if _, err := os.Stat("/tmp"); err == nil {
 		targets = append(targets,
-			&target{label: "System Temp", path: "/tmp", selected: false, safe: true},
+				 &target{label: "System Temp", path: "/tmp", selected: false, safe: true, key: "system_temp"},
 		)
 	}
 
 	return targets
+}
+
+func validateTargetPath(t *target) bool {
+	if t == nil || t.key == "" {
+		return false
+	}
+	validator, ok := pathValidators[t.key]
+	if !ok {
+		return false
+	}
+	return validator(t.path)
 }
 
 func diskUsage(p string) int64 {
@@ -714,18 +768,18 @@ func getMemInfo() (totalMB, usedMB, availMB uint64) {
 		}
 		v, _ := strconv.ParseUint(fields[1], 10, 64)
 		switch fields[0] {
-		case "MemTotal:":
-			memTotal = v
-		case "MemFree:":
-			memFree = v
-		case "MemAvailable:":
-			memAvail = v
-		case "Buffers:":
-			buffers = v
-		case "Cached:":
-			cached = v
-		case "SReclaimable:":
-			sreclaimable = v
+			case "MemTotal:":
+				memTotal = v
+			case "MemFree:":
+				memFree = v
+			case "MemAvailable:":
+				memAvail = v
+			case "Buffers:":
+				buffers = v
+			case "Cached:":
+				cached = v
+			case "SReclaimable:":
+				sreclaimable = v
 		}
 	}
 
@@ -764,10 +818,10 @@ func getSwapInfo() (totalMB, usedMB uint64) {
 		}
 		v, _ := strconv.ParseUint(fields[1], 10, 64)
 		switch fields[0] {
-		case "SwapTotal:":
-			swapTotal = v
-		case "SwapFree:":
-			swapFree = v
+			case "SwapTotal:":
+				swapTotal = v
+			case "SwapFree:":
+				swapFree = v
 		}
 	}
 	usedMB = (swapTotal - swapFree) / 1024
@@ -841,14 +895,14 @@ func detectGPUName(vendor, pciID string) string {
 
 	var lookup map[string]string
 	switch vendor {
-	case "0x1002":
-		lookup = amdMap
-	case "0x10de":
-		lookup = nvidiaMap
-	case "0x8086":
-		lookup = intelMap
-	default:
-		lookup = nil
+		case "0x1002":
+			lookup = amdMap
+		case "0x10de":
+			lookup = nvidiaMap
+		case "0x8086":
+			lookup = intelMap
+		default:
+			lookup = nil
 	}
 
 	vendorName := gpuVendorMap[vendor]
@@ -1217,8 +1271,8 @@ func scanTarget(path string) tea.Cmd {
 
 			entries = append(entries, fileEntry{
 				name:  d.Name(),
-				isDir: d.IsDir(),
-				size:  info.Size(),
+					 isDir: d.IsDir(),
+					 size:  info.Size(),
 			})
 
 			if len(entries) >= 40 {
@@ -1252,193 +1306,197 @@ func (m *model) Init() tea.Cmd {
 	return tea.Batch(
 		m.spinner.Tick,
 		scanTarget(m.targets[m.index].path),
-		calcSizes(m.targets),
-		startMonitor(),
+			 calcSizes(m.targets),
+			 startMonitor(),
 	)
 }
 
 func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case scanMsg:
-		m.fileEntries = msg.entries
-		m.fileCount = 0
-		m.scanDone = false
-		m.scanPending = false
-		return m, animTick()
-	case animTickMsg:
-		if !m.scanDone && m.fileCount < len(m.fileEntries) {
-			m.fileCount += 1
-			if m.fileCount >= len(m.fileEntries) {
-				m.fileCount = len(m.fileEntries)
-				m.scanDone = true
-			}
+		case scanMsg:
+			m.fileEntries = msg.entries
+			m.fileCount = 0
+			m.scanDone = false
+			m.scanPending = false
 			return m, animTick()
-		}
-		m.scanDone = true
-		return m, nil
-	case sizeMsg:
-		m.mu.Lock()
-		m.targets[msg.index].bytes = msg.size
-		m.mu.Unlock()
-		return m, nil
-	case sizesDoneMsg:
-		m.mu.Lock()
-		m.sizing = false
-		m.mu.Unlock()
-		return m, nil
-	case tea.KeyMsg:
-		if m.updateStatus == "done" || m.updateStatus == "error" {
-			m.updateStatus = ""
-			m.updateOutput = ""
-		}
-		if m.confirming {
+		case animTickMsg:
+			if !m.scanDone && m.fileCount < len(m.fileEntries) {
+				m.fileCount += 1
+				if m.fileCount >= len(m.fileEntries) {
+					m.fileCount = len(m.fileEntries)
+					m.scanDone = true
+				}
+				return m, animTick()
+			}
+			m.scanDone = true
+			return m, nil
+		case sizeMsg:
+			m.mu.Lock()
+			m.targets[msg.index].bytes = msg.size
+			m.mu.Unlock()
+			return m, nil
+		case sizesDoneMsg:
+			m.mu.Lock()
+			m.sizing = false
+			m.mu.Unlock()
+			return m, nil
+		case tea.KeyMsg:
+			if m.updateStatus == "done" || m.updateStatus == "error" {
+				m.updateStatus = ""
+				m.updateOutput = ""
+			}
+			if m.confirming {
+				switch msg.String() {
+					case "y", "Y":
+						m.confirming = false
+						m.state = "running"
+						return m, tick()
+					case "n", "N", "esc":
+						m.confirming = false
+						return m, nil
+				}
+				return m, nil
+			}
 			switch msg.String() {
-			case "y", "Y":
-				m.confirming = false
-				m.state = "running"
-				return m, tick()
-			case "n", "N", "esc":
-				m.confirming = false
-				return m, nil
-			}
-			return m, nil
-		}
-		switch msg.String() {
-		case "ctrl+c", "q":
-			return m, tea.Quit
-		case "tab":
-			m.tab = (m.tab + 1) % 3
-			return m, nil
-		case "up", "k":
-			if m.tab == 0 {
-				if m.index > 0 {
-					m.index--
-					if !m.sizing {
-						m.scanPending = true
-						return m, scanTarget(m.targets[m.index].path)
+				case "ctrl+c", "q":
+					return m, tea.Quit
+				case "tab":
+					m.tab = (m.tab + 1) % 3
+					return m, nil
+				case "up", "k":
+					if m.tab == 0 {
+						if m.index > 0 {
+							m.index--
+							if !m.sizing {
+								m.scanPending = true
+								return m, scanTarget(m.targets[m.index].path)
+							}
+						}
+					} else if m.tab == 2 {
+						if m.themeIndex > 0 {
+							m.themeIndex--
+							m.theme = themeList[m.themeIndex]
+							if err := saveConfig(m.theme); err != nil {
+								// silently fail; config is non-critical
+							}
+							t := themes[m.theme]
+							m.spinner.Style = lipgloss.NewStyle().Foreground(t.primary)
+							m.progress = progress.New(progress.WithGradient(string(t.primary), string(t.secondary)))
+						}
 					}
-				}
-			} else if m.tab == 2 {
-				if m.themeIndex > 0 {
-					m.themeIndex--
-					m.theme = themeList[m.themeIndex]
-					saveConfig(m.theme)
-					t := themes[m.theme]
-					m.spinner.Style = lipgloss.NewStyle().Foreground(t.primary)
-					m.progress = progress.New(progress.WithGradient(string(t.primary), string(t.secondary)))
-				}
-			}
-			return m, nil
-		case "down", "j":
-			if m.tab == 0 {
-				if m.index < len(m.targets)-1 {
-					m.index++
-					if !m.sizing {
-						m.scanPending = true
-						return m, scanTarget(m.targets[m.index].path)
+					return m, nil
+				case "down", "j":
+					if m.tab == 0 {
+						if m.index < len(m.targets)-1 {
+							m.index++
+							if !m.sizing {
+								m.scanPending = true
+								return m, scanTarget(m.targets[m.index].path)
+							}
+						}
+					} else if m.tab == 2 {
+						if m.themeIndex < len(themeList)-1 {
+							m.themeIndex++
+							m.theme = themeList[m.themeIndex]
+							if err := saveConfig(m.theme); err != nil {
+								// silently fail; config is non-critical
+							}
+							t := themes[m.theme]
+							m.spinner.Style = lipgloss.NewStyle().Foreground(t.primary)
+							m.progress = progress.New(progress.WithGradient(string(t.primary), string(t.secondary)))
+						}
 					}
-				}
-			} else if m.tab == 2 {
-				if m.themeIndex < len(themeList)-1 {
-					m.themeIndex++
-					m.theme = themeList[m.themeIndex]
-					saveConfig(m.theme)
-					t := themes[m.theme]
-					m.spinner.Style = lipgloss.NewStyle().Foreground(t.primary)
-					m.progress = progress.New(progress.WithGradient(string(t.primary), string(t.secondary)))
-				}
+					return m, nil
+				case " ":
+					if m.tab == 0 {
+						m.targets[m.index].selected = !m.targets[m.index].selected
+					}
+					return m, nil
+				case "enter":
+					if m.tab == 0 && m.state == "ready" {
+						m.confirming = true
+						return m, nil
+					}
+				case "u":
+					if m.state != "running" && m.state != "cleaning" && m.state != "updating" {
+						m.updateStatus = "updating"
+						m.state = "updating"
+						return m, m.update()
+					}
 			}
-			return m, nil
-		case " ":
-			if m.tab == 0 {
-				m.targets[m.index].selected = !m.targets[m.index].selected
-			}
-			return m, nil
-		case "enter":
-			if m.tab == 0 && m.state == "ready" {
-				m.confirming = true
-				return m, nil
-			}
-		case "u":
-			if m.state != "running" && m.state != "cleaning" && m.state != "updating" {
-				m.updateStatus = "updating"
-				m.state = "updating"
-				return m, m.update()
-			}
-		}
-	case updateMsg:
-		m.updateStatus = "done"
-		m.updateOutput = msg.output
-		if !msg.success {
-			m.updateStatus = "error"
-		}
-		m.state = "ready"
-		return m, nil
-	case tickMsg:
-		if m.state == "running" {
-			m.progressPct += 0.05
-			if m.progressPct >= 1.0 {
-				m.state = "cleaning"
-				return m, m.clean()
-			}
-			return m, tick()
-		}
-	case cleanDoneMsg:
-		m.cleanErrors = msg.errors
-		m.state = "done"
-		m.countdown = 5
-		return m, startCountdown()
-	case spinner.TickMsg:
-		var cmd tea.Cmd
-		m.spinner, cmd = m.spinner.Update(msg)
-		return m, cmd
-	case countdownMsg:
-		m.countdown--
-		if m.countdown <= 0 {
-			return m, tea.Quit
-		}
-		return m, startCountdown()
-	case tea.WindowSizeMsg:
-		m.width = msg.Width
-		m.height = msg.Height
-	case sysMonitorMsg:
-		m.mu.Lock()
-		if !m.cpuFirstTick {
-			cpuPct := calcCPUPercent(m.prevCPUTotal, m.prevCPUIdle)
-			m.cpuPercent = cpuPct
-		} else {
-			m.cpuFirstTick = false
-		}
-		t, i, _ := getCPUUsage()
-		m.prevCPUTotal = t
-		m.prevCPUIdle = i
+				case updateMsg:
+					m.updateStatus = "done"
+					m.updateOutput = msg.output
+					if !msg.success {
+						m.updateStatus = "error"
+					}
+					m.state = "ready"
+					return m, nil
+				case tickMsg:
+					if m.state == "running" {
+						m.progressPct += 0.05
+						if m.progressPct >= 1.0 {
+							m.state = "cleaning"
+							return m, m.clean()
+						}
+						return m, tick()
+					}
+				case cleanDoneMsg:
+					m.cleanErrors = msg.errors
+					m.state = "done"
+					m.countdown = 5
+					return m, startCountdown()
+				case spinner.TickMsg:
+					var cmd tea.Cmd
+					m.spinner, cmd = m.spinner.Update(msg)
+					return m, cmd
+				case countdownMsg:
+					m.countdown--
+					if m.countdown <= 0 {
+						return m, tea.Quit
+					}
+					return m, startCountdown()
+				case tea.WindowSizeMsg:
+					m.width = msg.Width
+					m.height = msg.Height
+				case sysMonitorMsg:
+					m.mu.Lock()
+					if !m.cpuFirstTick {
+						cpuPct := calcCPUPercent(m.prevCPUTotal, m.prevCPUIdle)
+						m.cpuPercent = cpuPct
+					} else {
+						m.cpuFirstTick = false
+					}
+					t, i, _ := getCPUUsage()
+					m.prevCPUTotal = t
+					m.prevCPUIdle = i
 
-		mt, mu, ma := getMemInfo()
-		m.memTotal = mt
-		m.memUsed = mu
-		m.memAvail = ma
-		if mt > 0 {
-			m.memPercent = float64(mu) / float64(mt) * 100
-		}
+					mt, mu, ma := getMemInfo()
+					m.memTotal = mt
+					m.memUsed = mu
+					m.memAvail = ma
+					if mt > 0 {
+						m.memPercent = float64(mu) / float64(mt) * 100
+					}
 
-		st, su := getSwapInfo()
-		m.swapTotal = st
-		m.swapUsed = su
-		if st > 0 {
-			m.swapPercent = float64(su) / float64(st) * 100
-		}
+					st, su := getSwapInfo()
+					m.swapTotal = st
+					m.swapUsed = su
+					if st > 0 {
+						m.swapPercent = float64(su) / float64(st) * 100
+					}
 
-		dt, du, dp := getDiskUsage()
-		m.diskTotal = dt
-		m.diskUsed = du
-		m.diskPct = dp
+					dt, du, dp := getDiskUsage()
+					m.diskTotal = dt
+					m.diskUsed = du
+					m.diskPct = dp
 
-		m.uptime = getUptime()
-		m.loadAvg = getLoadAvg()
-		m.procs = getProcesses(mt, m.prevProcCPU, 100)
-		m.gpus = getGPUs()
-		m.mu.Unlock()
-		return m, startMonitor()
+					m.uptime = getUptime()
+					m.loadAvg = getLoadAvg()
+					m.procs = getProcesses(mt, m.prevProcCPU, 100)
+					m.gpus = getGPUs()
+					m.mu.Unlock()
+					return m, startMonitor()
 	}
 	return m, nil
 }
@@ -1537,25 +1595,25 @@ func (m *model) View() string {
 	t := applyTheme(v.theme)
 
 	headerLines := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s\n",
-		themeHeader(t).Render(" LUMINA INSPECTOR "),
-		v.osIcon, v.osInfo,
-		lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Bold(true).Render("DEV : Reham"),
-		tabStyle(v.tab == 0, t).Render(" Cleaner "),
-		tabStyle(v.tab == 1, t).Render(" Monitor "),
-		tabStyle(v.tab == 2, t).Render(" Theme "))
+				   themeHeader(t).Render(" LUMINA INSPECTOR "),
+				   v.osIcon, v.osInfo,
+			    lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Bold(true).Render("DEV : Reham"),
+				   tabStyle(v.tab == 0, t).Render(" Cleaner "),
+				   tabStyle(v.tab == 1, t).Render(" Monitor "),
+				   tabStyle(v.tab == 2, t).Render(" Theme "))
 
 	var content string
 	if v.updateStatus == "updating" {
 		dialogContent := fmt.Sprintf(
 			"%s\n\n%s\n\nUpdating Lumina...\nPlease wait.",
 			themeTitle(t).Render("⚠ Updating"),
-			v.spinnerView,
+					     v.spinnerView,
 		)
 		dialog := lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(t.primary).
-			Padding(2, 4).
-			Render(dialogContent)
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(t.primary).
+		Padding(2, 4).
+		Render(dialogContent)
 		content = dialog
 	} else if v.updateStatus == "done" || v.updateStatus == "error" {
 		title := "✔ Update Complete"
@@ -1567,28 +1625,28 @@ func (m *model) View() string {
 		dialogContent := fmt.Sprintf(
 			"%s\n\n%s\n\n%s",
 			lipgloss.NewStyle().Foreground(col).Bold(true).Render(title),
-			v.updateOutput,
-			lipgloss.NewStyle().Foreground(t.muted).Render("Press any key to continue"),
+					     v.updateOutput,
+			       lipgloss.NewStyle().Foreground(t.muted).Render("Press any key to continue"),
 		)
 		dialog := lipgloss.NewStyle().
-			Border(lipgloss.DoubleBorder()).
-			BorderForeground(col).
-			Padding(1, 2).
-			Render(dialogContent)
+		Border(lipgloss.DoubleBorder()).
+		BorderForeground(col).
+		Padding(1, 2).
+		Render(dialogContent)
 		content = dialog
 	} else if v.tab == 0 {
 		if v.confirming {
 			dialogContent := fmt.Sprintf(
 				"%s\n\nAre you sure you want to clean\nthe selected targets?\nThis action cannot be undone.\n\n%s  %s",
 				themeTitle(t).Render("⚠ Confirm Clean"),
-				lipgloss.NewStyle().Foreground(t.success).Render("[Y] Yes"),
-				lipgloss.NewStyle().Foreground(t.error).Render("[N] No"),
+						     lipgloss.NewStyle().Foreground(t.success).Render("[Y] Yes"),
+						     lipgloss.NewStyle().Foreground(t.error).Render("[N] No"),
 			)
 			dialog := lipgloss.NewStyle().
-				Border(lipgloss.DoubleBorder()).
-				BorderForeground(t.warning).
-				Padding(1, 3).
-				Render(dialogContent)
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(t.warning).
+			Padding(1, 3).
+			Render(dialogContent)
 			content = dialog
 		} else {
 			left := renderLeft(t, v)
@@ -1674,11 +1732,11 @@ func renderLeft(t Theme, v modelView) string {
 
 	if v.state == "running" {
 		s = fmt.Sprintf("%s Cleaning...\n\n%s",
-			v.spinnerView, v.progressView)
+				v.spinnerView, v.progressView)
 	}
 	if v.state == "cleaning" {
 		s = fmt.Sprintf("%s Running cleaners...\n\n%s",
-			v.spinnerView, v.progressDoneView)
+				v.spinnerView, v.progressDoneView)
 	}
 	if v.state == "done" {
 		s = themeTitle(t).Render("✔ System Cleaned!") + "\n"
@@ -1697,14 +1755,14 @@ func renderRight(t Theme, v modelView) string {
 
 	if v.scanPending {
 		return lipgloss.NewStyle().Width(w).Height(16).Padding(0, 0, 0, 1).
-			Border(lipgloss.ThickBorder()).BorderForeground(themeTitle(t).GetForeground()).
-			Render("\n\n  " + v.spinnerView + " scanning files...")
+		Border(lipgloss.ThickBorder()).BorderForeground(themeTitle(t).GetForeground()).
+		Render("\n\n  " + v.spinnerView + " scanning files...")
 	}
 
 	if len(v.fileEntries) == 0 {
 		return lipgloss.NewStyle().Width(w).Height(16).Padding(0, 0, 0, 1).
-			Border(lipgloss.ThickBorder()).BorderForeground(themeTitle(t).GetForeground()).
-			Render("\n\n  No files found")
+		Border(lipgloss.ThickBorder()).BorderForeground(themeTitle(t).GetForeground()).
+		Render("\n\n  No files found")
 	}
 
 	var dirs []string
@@ -1803,8 +1861,8 @@ func renderRight(t Theme, v modelView) string {
 	content += "  " + lipgloss.NewStyle().Foreground(t.muted).Render(stats)
 
 	return lipgloss.NewStyle().Width(w).Height(18).Padding(0, 0, 0, 1).
-		Border(lipgloss.ThickBorder()).BorderForeground(t.primary).
-		Render(content)
+	Border(lipgloss.ThickBorder()).BorderForeground(t.primary).
+	Render(content)
 }
 
 func renderMonitor(t Theme, v modelView) string {
@@ -1872,7 +1930,7 @@ func renderMonitor(t Theme, v modelView) string {
 	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Press Tab to switch panels")
 
 	return lipgloss.NewStyle().Width(w).Padding(0, 2).
-		Render(s)
+	Render(s)
 }
 
 func renderTheme(t Theme, v modelView) string {
@@ -1911,7 +1969,7 @@ func renderTheme(t Theme, v modelView) string {
 		}
 
 		preview := lipgloss.NewStyle().
-			Foreground(theme.primary).Render("██")
+		Foreground(theme.primary).Render("██")
 		preview += " " + lipgloss.NewStyle().Foreground(theme.secondary).Render("██")
 		preview += " " + lipgloss.NewStyle().Foreground(theme.success).Render("██")
 		preview += " " + lipgloss.NewStyle().Foreground(theme.warning).Render("██")
@@ -1931,23 +1989,23 @@ func renderTheme(t Theme, v modelView) string {
 	s += "\n  " + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("Haze, Pebble, Honey, Moonlight")
 
 	return lipgloss.NewStyle().Width(w).Padding(0, 2).
-		Render(s)
+	Render(s)
 }
 
 func procState(s string, t Theme) string {
 	switch s {
-	case "R":
-		return themeBarLow(t).Render("R")
-	case "S":
-		return themeGlow(t).Render("S")
-	case "D":
-		return lipgloss.NewStyle().Foreground(t.warning).Render("D")
-	case "Z":
-		return lipgloss.NewStyle().Foreground(t.error).Render("Z")
-	case "T":
-		return lipgloss.NewStyle().Foreground(t.secondary).Render("T")
-	default:
-		return s
+		case "R":
+			return themeBarLow(t).Render("R")
+		case "S":
+			return themeGlow(t).Render("S")
+		case "D":
+			return lipgloss.NewStyle().Foreground(t.warning).Render("D")
+		case "Z":
+			return lipgloss.NewStyle().Foreground(t.error).Render("Z")
+		case "T":
+			return lipgloss.NewStyle().Foreground(t.secondary).Render("T")
+		default:
+			return s
 	}
 }
 
@@ -2005,14 +2063,8 @@ func renderSideInfo(text string, pct float64, t Theme) string {
 }
 
 func (m *model) safeClean(t *target) error {
-	if t.path == "/nix/store" {
-		return nil
-	}
-	if strings.HasPrefix(t.path, "/nix") {
-		return nil
-	}
-	if t.path == "/tmp" {
-		return nil
+	if !validateTargetPath(t) {
+		return fmt.Errorf("path validation failed for %s", t.path)
 	}
 
 	entries, err := os.ReadDir(t.path)
@@ -2035,7 +2087,9 @@ func (m *model) safeClean(t *target) error {
 			continue
 		}
 
-		_ = os.RemoveAll(fp)
+		if err := os.RemoveAll(fp); err != nil {
+			return fmt.Errorf("failed to remove %s: %w", fp, err)
+		}
 	}
 	return nil
 }
@@ -2083,175 +2137,226 @@ func getLuminaDir() string {
 	return dir
 }
 
+func computeFileHash(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
 func (m *model) update() tea.Cmd {
 	return func() tea.Msg {
-		dir := getLuminaDir()
-
-		pullCmd := exec.Command("git", "pull")
-		pullCmd.Dir = dir
-		pullOut, err := pullCmd.CombinedOutput()
-		if err != nil {
-			return updateMsg{success: false, output: fmt.Sprintf("git pull failed:\n%s", string(pullOut))}
-		}
-
-		buildCmd := exec.Command("go", "build", "-o", "lumina", ".")
-		buildCmd.Dir = dir
-		buildOut, err := buildCmd.CombinedOutput()
-		if err != nil {
-			return updateMsg{success: false, output: fmt.Sprintf("build failed:\n%s", string(buildOut))}
-		}
-
 		exe, err := os.Executable()
-		if err == nil {
-			_ = os.Remove(exe)
-			input, _ := os.ReadFile(filepath.Join(dir, "lumina"))
-			if input != nil {
-				_ = os.WriteFile(exe, input, 0755)
-			}
+		if err != nil {
+			return updateMsg{success: false, output: fmt.Sprintf("failed to locate executable: %v", err)}
 		}
 
-		return updateMsg{success: true, output: fmt.Sprintf("git pull:\n%s\nbuild: success", string(pullOut))}
+		if err := syscall.Access(exe, syscall.W_OK); err != nil {
+			return updateMsg{success: false, output: "cannot self-update: no write permission to the binary.
+				Try: sudo lumina --update
+				Or install in a user-writable directory."}
+			}
+
+			dir := getLuminaDir()
+
+			pullCmd := exec.Command("git", "pull")
+			pullCmd.Dir = dir
+			pullOut, err := pullCmd.CombinedOutput()
+			if err != nil {
+				return updateMsg{success: false, output: fmt.Sprintf("git pull failed:\n%s", string(pullOut))}
+			}
+
+			buildCmd := exec.Command("go", "build", "-o", "lumina", ".")
+			buildCmd.Dir = dir
+			buildOut, err := buildCmd.CombinedOutput()
+			if err != nil {
+				return updateMsg{success: false, output: fmt.Sprintf("build failed:\n%s", string(buildOut))}
+			}
+
+			exe, err := os.Executable()
+			if err != nil {
+				return updateMsg{success: false, output: fmt.Sprintf("failed to get executable path: %v", err)}
+			}
+
+			newBinary := filepath.Join(dir, "lumina")
+			newHash, err := computeFileHash(newBinary)
+			if err != nil {
+				return updateMsg{success: false, output: fmt.Sprintf("failed to hash new binary: %v", err)}
+			}
+
+			backupPath := exe + ".backup"
+			if err := os.Rename(exe, backupPath); err != nil {
+				return updateMsg{success: false, output: fmt.Sprintf("failed to create backup: %v", err)}
+			}
+
+			input, err := os.ReadFile(newBinary)
+			if err != nil {
+				_ = os.Rename(backupPath, exe)
+				return updateMsg{success: false, output: fmt.Sprintf("failed to read new binary: %v", err)}
+			}
+
+			if err := os.WriteFile(exe, input, 0755); err != nil {
+				_ = os.Rename(backupPath, exe)
+				return updateMsg{success: false, output: fmt.Sprintf("failed to write new binary: %v", err)}
+			}
+
+			writtenHash, err := computeFileHash(exe)
+			if err != nil || writtenHash != newHash {
+				_ = os.Rename(backupPath, exe)
+				return updateMsg{success: false, output: "hash verification failed, restored backup"}
+			}
+
+			_ = os.Remove(backupPath)
+
+			return updateMsg{success: true, output: fmt.Sprintf("git pull:\n%s\nbuild: success\nhash: %s", string(pullOut), newHash[:16])}
+		}
 	}
-}
 
-func (m *model) clean() tea.Cmd {
-	return func() tea.Msg {
-		var errs []string
-		selectedAny := false
+	func (m *model) clean() tea.Cmd {
+		return func() tea.Msg {
+			var errs []string
+			selectedAny := false
 
-		for _, t := range m.targets {
-			if t.selected && t.safe {
-				selectedAny = true
-				if err := m.safeClean(t); err != nil {
-					errs = append(errs, fmt.Sprintf("%s: %v", t.label, err))
+			for _, t := range m.targets {
+				if t.selected && t.safe {
+					selectedAny = true
+					if err := m.safeClean(t); err != nil {
+						errs = append(errs, fmt.Sprintf("%s: %v", t.label, err))
+					}
 				}
 			}
-		}
 
-		if !selectedAny {
+			if !selectedAny {
+				return cleanDoneMsg{errors: errs}
+			}
+
+			osID := strings.ToLower(getOSID())
+
+			var cmds [][]string
+			switch osID {
+				case "ubuntu", "debian", "linuxmint", "pop", "zorin", "elementary", "deepin", "raspbian":
+					cmds = [][]string{{"apt-get", "clean"}, {"apt-get", "autoremove", "-y"}}
+				case "fedora", "centos", "rocky", "almalinux":
+					cmds = [][]string{{"dnf", "clean", "all"}}
+				case "arch", "archarm", "manjaro", "endeavouros", "cachyos":
+					if commandExists("paccache") {
+						cmds = [][]string{{"paccache", "-r", "-k0"}}
+					} else {
+						cmds = [][]string{{"pacman", "-Sc", "--noconfirm"}}
+					}
+				case "void":
+					cmds = [][]string{{"xbps-remove", "-O"}}
+				case "alpine":
+					cmds = [][]string{{"apk", "cache", "clean"}}
+				case "nixos":
+					cmds = [][]string{{"timeout", "30", "nix-collect-garbage", "-d"}}
+				case "opensuse", "opensuse-leap", "opensuse-tumbleweed":
+					cmds = [][]string{{"zypper", "clean", "-a"}}
+				case "gentoo":
+					cmds = [][]string{{"eclean-distfiles"}}
+				default:
+			}
+
+			for _, args := range cmds {
+				cmd := exec.Command(args[0], args[1:]...)
+				out, err := cmd.CombinedOutput()
+				outStr := strings.TrimSpace(string(out))
+				if outStr != "" {
+					errs = append(errs, fmt.Sprintf("%s: %s", args[0], outStr))
+				}
+				if err != nil {
+					errs = append(errs, fmt.Sprintf("%s: %v", args[0], err))
+				}
+			}
+
 			return cleanDoneMsg{errors: errs}
 		}
+	}
 
-		osID := strings.ToLower(getOSID())
+	type tickMsg struct{}
+	type countdownMsg struct{}
 
-		var cmds [][]string
-		switch osID {
-		case "ubuntu", "debian", "linuxmint", "pop", "zorin", "elementary", "deepin", "raspbian":
-			cmds = [][]string{{"apt-get", "clean"}, {"apt-get", "autoremove", "-y"}}
-		case "fedora", "centos", "rocky", "almalinux":
-			cmds = [][]string{{"dnf", "clean", "all"}}
-		case "arch", "archarm", "manjaro", "endeavouros", "cachyos":
-			if commandExists("paccache") {
-				cmds = [][]string{{"paccache", "-r", "-k0"}}
-			} else {
-				cmds = [][]string{{"pacman", "-Sc", "--noconfirm"}}
-			}
-		case "void":
-			cmds = [][]string{{"xbps-remove", "-O"}}
-		case "alpine":
-			cmds = [][]string{{"apk", "cache", "clean"}}
-		case "nixos":
-			cmds = [][]string{{"timeout", "30", "nix-collect-garbage", "-d"}}
-		case "opensuse", "opensuse-leap", "opensuse-tumbleweed":
-			cmds = [][]string{{"zypper", "clean", "-a"}}
-		case "gentoo":
-			cmds = [][]string{{"eclean-distfiles"}}
-		default:
+	func tick() tea.Cmd {
+		return tea.Tick(time.Millisecond*60, func(t time.Time) tea.Msg { return tickMsg{} })
+	}
+
+	func startCountdown() tea.Cmd {
+		return tea.Tick(time.Second, func(t time.Time) tea.Msg { return countdownMsg{} })
+	}
+
+	func animTick() tea.Cmd {
+		return tea.Tick(time.Millisecond*25, func(t time.Time) tea.Msg { return animTickMsg{} })
+	}
+
+	func main() {
+		showVersion := flag.Bool("version", false, "show version")
+		flag.Parse()
+		if *showVersion {
+			fmt.Println("Lumina v" + version)
+			return
 		}
 
-		for _, args := range cmds {
-			cmd := exec.Command(args[0], args[1:]...)
-			out, err := cmd.CombinedOutput()
-			outStr := strings.TrimSpace(string(out))
-			if outStr != "" {
-				errs = append(errs, fmt.Sprintf("%s: %s", args[0], outStr))
+		if len(os.Args) > 1 && os.Args[1] == "--update" {
+			m := &model{spinner: spinner.New(spinner.WithSpinner(spinner.Dot)), prevProcCPU: make(map[int]uint64)}
+			msg := m.update()()
+			if umsg, ok := msg.(updateMsg); ok {
+				fmt.Print(umsg.output)
+				if !umsg.success {
+					os.Exit(1)
+				}
 			}
-			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", args[0], err))
-			}
+			return
 		}
 
-		return cleanDoneMsg{errors: errs}
-	}
-}
+		if !hasRootPrivileges() {
+			fmt.Println("This program requires root privileges. Please run with sudo or pkexec.")
+			os.Exit(1)
+		}
 
-type tickMsg struct{}
-type countdownMsg struct{}
+		osName, osIcon := detectOS()
+		osID := getOSID()
+		targets := buildTargets(osID)
 
-func tick() tea.Cmd {
-	return tea.Tick(time.Millisecond*60, func(t time.Time) tea.Msg { return tickMsg{} })
-}
+		t, i, nCPUs := getCPUUsage()
 
-func startCountdown() tea.Cmd {
-	return tea.Tick(time.Second, func(t time.Time) tea.Msg { return countdownMsg{} })
-}
-
-func animTick() tea.Cmd {
-	return tea.Tick(time.Millisecond*25, func(t time.Time) tea.Msg { return animTickMsg{} })
-}
-
-func main() {
-	showVersion := flag.Bool("version", false, "show version")
-	flag.Parse()
-	if *showVersion {
-		fmt.Println("Lumina v" + version)
-		return
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "--update" {
-		m := &model{spinner: spinner.New(spinner.WithSpinner(spinner.Dot)), prevProcCPU: make(map[int]uint64)}
-		msg := m.update()()
-		if umsg, ok := msg.(updateMsg); ok {
-			fmt.Print(umsg.output)
-			if !umsg.success {
-				os.Exit(1)
+		cfg := loadConfig()
+		themeIdx := 0
+		for i, thm := range themeList {
+			if thm == cfg.Theme {
+				themeIdx = i
+				break
 			}
 		}
-		return
-	}
 
-	if !hasRootPrivileges() {
-		fmt.Println("This program requires root privileges. Please run with sudo or pkexec.")
-		os.Exit(1)
-	}
+		m := &model{
+			spinner:      spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(themes[cfg.Theme].primary))),
+			progress:     progress.New(progress.WithGradient(string(themes[cfg.Theme].primary), string(themes[cfg.Theme].secondary))),
+			targets:      targets,
+			state:        "ready",
+			osInfo:       osName,
+			osIcon:       osIcon,
+			sizing:       true,
+			prevCPUTotal: t,
+			prevCPUIdle:  i,
+			cpuFirstTick: true,
+			prevProcCPU:  make(map[int]uint64),
+			numCPUs:      nCPUs,
+			loadAvg:      []float64{0, 0, 0},
+			theme:        cfg.Theme,
+			themeIndex:   themeIdx,
+		}
 
-	osName, osIcon := detectOS()
-	osID := getOSID()
-	targets := buildTargets(osID)
+		getSysInfo(m)
 
-	t, i, nCPUs := getCPUUsage()
-
-	cfg := loadConfig()
-	themeIdx := 0
-	for i, thm := range themeList {
-		if thm == cfg.Theme {
-			themeIdx = i
-			break
+		if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
+			fmt.Printf("Error: %v\n", err)
+			os.Exit(1)
 		}
 	}
-
-	m := &model{
-		spinner:      spinner.New(spinner.WithSpinner(spinner.Dot), spinner.WithStyle(lipgloss.NewStyle().Foreground(themes[cfg.Theme].primary))),
-		progress:     progress.New(progress.WithGradient(string(themes[cfg.Theme].primary), string(themes[cfg.Theme].secondary))),
-		targets:      targets,
-		state:        "ready",
-		osInfo:       osName,
-		osIcon:       osIcon,
-		sizing:       true,
-		prevCPUTotal: t,
-		prevCPUIdle:  i,
-		cpuFirstTick: true,
-		prevProcCPU:  make(map[int]uint64),
-		numCPUs:      nCPUs,
-		loadAvg:      []float64{0, 0, 0},
-		theme:        cfg.Theme,
-		themeIndex:   themeIdx,
-	}
-
-	getSysInfo(m)
-
-	if _, err := tea.NewProgram(m, tea.WithAltScreen()).Run(); err != nil {
-		fmt.Printf("Error: %v\n", err)
-		os.Exit(1)
-	}
-}
