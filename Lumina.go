@@ -23,7 +23,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const version = "1.1.0"
+const version = "1.1.1"
 
 type Config struct {
 	Theme ThemeType `yaml:"theme"`
