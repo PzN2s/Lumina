@@ -2004,7 +2004,28 @@ func renderSideInfo(text string, pct float64, t Theme) string {
 	return lipgloss.NewStyle().Foreground(col).Render(text)
 }
 
-func (m *model) safeClean(t *target) error {
+func (m *model) cleanTarget(t *target) error {
+	allowed := []string{
+		".cache",
+		".local/share/Trash",
+		"/var/cache/apt/archives",
+		"/var/cache/dnf",
+		"/var/cache/pacman/pkg",
+		"/var/cache/xbps",
+		"/var/cache/apk",
+		"/var/cache/distfiles",
+		"/var/cache/zypp/packages",
+	}
+	ok := false
+	for _, a := range allowed {
+		if t.path == filepath.Clean(a) || strings.HasSuffix(t.path, "/"+a) {
+			ok = true
+			break
+		}
+	}
+	if !ok {
+		return fmt.Errorf("path not in whitelist: %s", t.path)
+	}
 	if t.path == "/nix/store" {
 		return nil
 	}
@@ -2122,7 +2143,7 @@ func (m *model) clean() tea.Cmd {
 		for _, t := range m.targets {
 			if t.selected && t.safe {
 				selectedAny = true
-				if err := m.safeClean(t); err != nil {
+				if err := m.cleanTarget(t); err != nil {
 					errs = append(errs, fmt.Sprintf("%s: %v", t.label, err))
 				}
 			}
