@@ -2008,6 +2008,8 @@ func (m *model) cleanTarget(t *target) error {
 	allowed := []string{
 		".cache",
 		".local/share/Trash",
+		"/nix/store",
+		"/tmp",
 		"/var/cache/apt/archives",
 		"/var/cache/dnf",
 		"/var/cache/pacman/pkg",
