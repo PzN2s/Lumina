@@ -26,6 +26,21 @@ import (
 
 const version = "1.1.1"
 
+var debugLog *os.File
+
+func init() {
+	f, err := os.OpenFile("/tmp/lumina-clean.log", os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0644)
+	if err == nil {
+		debugLog = f
+	}
+}
+
+func debug(v ...any) {
+	if debugLog != nil {
+		fmt.Fprintln(debugLog, v...)
+	}
+}
+
 type Config struct {
 	Theme ThemeType `yaml:"theme"`
 }
@@ -2012,6 +2027,7 @@ func renderSideInfo(text string, pct float64, t Theme) string {
 }
 
 func (m *model) cleanTarget(t *target) error {
+	debug("cleanTarget:", t.label, t.path)
 	allowed := []string{
 		".cache",
 		".local/share/Trash",
@@ -2033,27 +2049,36 @@ func (m *model) cleanTarget(t *target) error {
 		}
 	}
 	if !ok {
+		debug("whitelist REJECTED:", t.path)
 		return fmt.Errorf("path not in whitelist: %s", t.path)
 	}
+	debug("whitelist OK:", t.path)
 	if t.path == "/nix/store" {
+		debug("skipped: /nix/store")
 		return nil
 	}
 	if strings.HasPrefix(t.path, "/nix") {
+		debug("skipped: /nix*")
 		return nil
 	}
 	if t.path == "/tmp" {
+		debug("skipped: /tmp")
 		return nil
 	}
 
 	entries, err := os.ReadDir(t.path)
 	if err != nil {
+		debug("ReadDir error:", err)
 		return err
 	}
+	debug("entries found:", len(entries))
 	var removeErr error
 	for _, e := range entries {
 		fp := filepath.Join(t.path, e.Name())
+		debug("removing:", fp)
 
 		if err := os.RemoveAll(fp); err != nil {
+			debug("remove error:", err)
 			removeErr = err
 		}
 	}
@@ -2162,16 +2187,21 @@ func (m *model) clean() tea.Cmd {
 		var errs []string
 		selectedAny := false
 
+		debug("=== CLEAN START ===")
 		for _, t := range m.targets {
+			debug("target:", t.label, t.path, "selected:", t.selected, "safe:", t.safe)
 			if t.selected && t.safe {
 				selectedAny = true
 				if err := m.cleanTarget(t); err != nil {
+					debug("ERROR:", t.label, err)
 					errs = append(errs, fmt.Sprintf("%s [%s]: %v", t.label, t.path, err))
 				}
 			}
 		}
+		debug("selectedAny:", selectedAny)
 
 		if !selectedAny {
+			debug("no targets selected, returning done")
 			return cleanDoneMsg{errors: errs}
 		}
 
@@ -2202,9 +2232,12 @@ func (m *model) clean() tea.Cmd {
 		default:
 		}
 
+		debug("OS commands for:", osID, "count:", len(cmds))
 		for _, args := range cmds {
+			debug("running:", args)
 			cmd := exec.Command(args[0], args[1:]...)
 			out, err := cmd.CombinedOutput()
+			debug("output:", string(out))
 			if err != nil {
 				outStr := strings.TrimSpace(string(out))
 				if outStr != "" {
@@ -2214,6 +2247,8 @@ func (m *model) clean() tea.Cmd {
 				}
 			}
 		}
+
+		debug("=== CLEAN DONE ===")
 
 		return cleanDoneMsg{errors: errs}
 	}
@@ -2262,6 +2297,14 @@ func main() {
 	osName, osIcon := detectOS()
 	osID := getOSID()
 	targets := buildTargets(osID)
+
+	debug("=== STARTUP ===")
+	debug("osID:", osID)
+	debug("osName:", osName)
+	debug("HOME from realUserHomeDir:", realUserHomeDir())
+	for _, t := range targets {
+		debug("target:", t.label, t.path, "safe:", t.safe)
+	}
 
 	t, i, nCPUs := getCPUUsage()
 
