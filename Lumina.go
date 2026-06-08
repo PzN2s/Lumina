@@ -1312,6 +1312,12 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.state == "done" {
+			m.state = "ready"
+			m.progressPct = 0
+			m.cleanErrors = nil
+			return m, nil
+		}
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
@@ -1395,18 +1401,11 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case cleanDoneMsg:
 		m.cleanErrors = msg.errors
 		m.state = "done"
-		m.countdown = 5
-		return m, startCountdown()
+		return m, nil
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
-	case countdownMsg:
-		m.countdown--
-		if m.countdown <= 0 {
-			return m, tea.Quit
-		}
-		return m, startCountdown()
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
@@ -1694,8 +1693,7 @@ func renderLeft(t Theme, v modelView) string {
 		for _, err := range v.cleanErrors {
 			s += lipgloss.NewStyle().Foreground(t.error).Render("  ⚠ "+err) + "\n"
 		}
-		s += fmt.Sprintf("\n   Exiting in %d...\n\n", v.countdown)
-		s += lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Italic(true).Render("   byeee")
+		s += "\n" + lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("   Press any key to continue")
 	}
 
 	return lipgloss.NewStyle().Width(32).Render(s)
