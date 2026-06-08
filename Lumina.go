@@ -2049,25 +2049,15 @@ func (m *model) cleanTarget(t *target) error {
 	if err != nil {
 		return err
 	}
+	var removeErr error
 	for _, e := range entries {
 		fp := filepath.Join(t.path, e.Name())
 
-		info, err := os.Lstat(fp)
-		if err != nil {
-			continue
+		if err := os.RemoveAll(fp); err != nil {
+			removeErr = err
 		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			continue
-		}
-
-		rel, err := filepath.Rel(t.path, fp)
-		if err != nil || strings.HasPrefix(rel, "../") {
-			continue
-		}
-
-		_ = os.RemoveAll(fp)
 	}
-	return nil
+	return removeErr
 }
 
 func hasRootPrivileges() bool {
@@ -2211,12 +2201,13 @@ func (m *model) clean() tea.Cmd {
 		for _, args := range cmds {
 			cmd := exec.Command(args[0], args[1:]...)
 			out, err := cmd.CombinedOutput()
-			outStr := strings.TrimSpace(string(out))
-			if outStr != "" {
-				errs = append(errs, fmt.Sprintf("%s: %s", args[0], outStr))
-			}
 			if err != nil {
-				errs = append(errs, fmt.Sprintf("%s: %v", args[0], err))
+				outStr := strings.TrimSpace(string(out))
+				if outStr != "" {
+					errs = append(errs, fmt.Sprintf("%s: %s", args[0], outStr))
+				} else {
+					errs = append(errs, fmt.Sprintf("%s: %v", args[0], err))
+				}
 			}
 		}
 
