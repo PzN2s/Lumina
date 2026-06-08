@@ -1386,6 +1386,16 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		case "enter":
 			if m.tab == 0 && m.state == "ready" {
+				hasSelected := false
+				for _, t := range m.targets {
+					if t.selected {
+						hasSelected = true
+						break
+					}
+				}
+				if !hasSelected {
+					m.targets[m.index].selected = true
+				}
 				m.confirming = true
 				return m, nil
 			}
