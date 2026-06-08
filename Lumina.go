@@ -1569,13 +1569,14 @@ func (m *model) View() string {
 
 	t := applyTheme(v.theme)
 
-	headerLines := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s\n",
+	headerLines := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s    %s\n",
 		themeHeader(t).Render(" LUMINA INSPECTOR "),
 		v.osIcon, v.osInfo,
 		lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Bold(true).Render("DEV : Reham"),
 		tabStyle(v.tab == 0, t).Render(" Cleaner "),
 		tabStyle(v.tab == 1, t).Render(" Monitor "),
-		tabStyle(v.tab == 2, t).Render(" Theme "))
+		tabStyle(v.tab == 2, t).Render(" Theme "),
+		lipgloss.NewStyle().Foreground(t.muted).Italic(true).Render("[q] quit"))
 
 	var content string
 	if v.updateStatus == "updating" {
