@@ -2076,6 +2076,10 @@ func realUserHomeDir() string {
 	if err == nil {
 		return u.HomeDir
 	}
+	sudoUser := os.Getenv("SUDO_USER")
+	if sudoUser != "" {
+		return "/home/" + sudoUser
+	}
 	return ""
 }
 
@@ -2162,7 +2166,7 @@ func (m *model) clean() tea.Cmd {
 			if t.selected && t.safe {
 				selectedAny = true
 				if err := m.cleanTarget(t); err != nil {
-					errs = append(errs, fmt.Sprintf("%s: %v", t.label, err))
+					errs = append(errs, fmt.Sprintf("%s [%s]: %v", t.label, t.path, err))
 				}
 			}
 		}
