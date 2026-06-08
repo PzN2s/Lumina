@@ -1337,7 +1337,10 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "tab":
-			m.tab = (m.tab + 1) % 3
+			m.tab = (m.tab + 1) % 4
+			return m, nil
+		case "shift+tab":
+			m.tab = (m.tab + 3) % 4
 			return m, nil
 		case "up", "k":
 			if m.tab == 0 {
@@ -1385,6 +1388,9 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
+			if m.tab == 3 {
+				return m, tea.Quit
+			}
 			if m.tab == 0 && m.state == "ready" {
 				hasSelected := false
 				for _, t := range m.targets {
@@ -1569,13 +1575,14 @@ func (m *model) View() string {
 
 	t := applyTheme(v.theme)
 
-	headerLines := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s\n",
+	headerLines := fmt.Sprintf("%s  %s %s | %s | %s / %s / %s / %s\n",
 		themeHeader(t).Render(" LUMINA INSPECTOR "),
 		v.osIcon, v.osInfo,
 		lipgloss.NewStyle().Foreground(themeTitle(t).GetForeground()).Bold(true).Render("DEV : Reham"),
 		tabStyle(v.tab == 0, t).Render(" Cleaner "),
 		tabStyle(v.tab == 1, t).Render(" Monitor "),
-		tabStyle(v.tab == 2, t).Render(" Theme "))
+		tabStyle(v.tab == 2, t).Render(" Theme "),
+		tabStyle(v.tab == 3, t).Render(" Exit "))
 
 	var content string
 	if v.updateStatus == "updating" {
@@ -1631,8 +1638,21 @@ func (m *model) View() string {
 		}
 	} else if v.tab == 1 {
 		content = headerLines + "\n" + renderMonitor(t, v)
-	} else {
+	} else if v.tab == 2 {
 		content = headerLines + "\n" + renderTheme(t, v)
+	} else {
+		dialogContent := fmt.Sprintf(
+			"\n\n  %s\n\n  %s\n\n  %s",
+			themeTitle(t).Render("Exit Lumina?"),
+			lipgloss.NewStyle().Foreground(t.muted).Render("Press Enter to exit, Tab to go back"),
+			tabStyle(false, t).Render("  Exit  "),
+		)
+		dialog := lipgloss.NewStyle().
+			Border(lipgloss.DoubleBorder()).
+			BorderForeground(t.error).
+			Padding(1, 3).
+			Render(dialogContent)
+		content = headerLines + "\n" + dialog
 	}
 
 	bordered := themeBorder(t).Render(content)
