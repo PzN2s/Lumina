@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -30,9 +31,13 @@ type Config struct {
 }
 
 func getConfigPath() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
+	home := realUserHomeDir()
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
 	}
 	configDir := filepath.Join(home, ".config", "lumina")
 	_ = os.MkdirAll(configDir, 0755)
@@ -516,9 +521,13 @@ func detectOS() (name, icon string) {
 }
 
 func buildTargets(osID string) []*target {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		home = "/tmp"
+	home := realUserHomeDir()
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			home = "/tmp"
+		}
 	}
 	var targets []*target
 
@@ -2067,6 +2076,21 @@ func hasRootPrivileges() bool {
 	return os.Geteuid() == 0
 }
 
+func realUserHomeDir() string {
+	uid := os.Getenv("SUDO_UID")
+	if uid != "" {
+		u, err := user.LookupId(uid)
+		if err == nil {
+			return u.HomeDir
+		}
+	}
+	u, err := user.Lookup(os.Getenv("SUDO_USER"))
+	if err == nil {
+		return u.HomeDir
+	}
+	return ""
+}
+
 func commandExists(cmd string) bool {
 	_, err := exec.LookPath(cmd)
 	return err == nil
@@ -2090,9 +2114,13 @@ func getLuminaDir() string {
 	if info, err := os.Stat(filepath.Join(dir, ".git")); err == nil && info.IsDir() {
 		return dir
 	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return dir
+	home := realUserHomeDir()
+	if home == "" {
+		var err error
+		home, err = os.UserHomeDir()
+		if err != nil {
+			return dir
+		}
 	}
 	candidates := []string{
 		filepath.Join(home, "Documents", "Lumina"),
